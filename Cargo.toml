@@ -1,0 +1,24 @@
+[package]
+name = "serpapi-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Thomas Hurst <thomas@serpapi.com>"]
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.4.11", features = ["derive", "env"] }
+color-eyre = "0.6.2"
+colored_json = "4.1.0"
+html2text = { version = "0.6.0", features = ["ansi_colours"] }
+reqwest = "0.11.22"
+serde_json = "1.0.108"
+serpapi = { version = "0.1.0", path = "../serpapi-rust" }
+termion = "2.0.3"
+tokio = { version = "1.35.0", features = ["full"] }
+
+[package.metadata.docs.rs]
+# Docs are identical across targets.
+targets = []
+
