@@ -16,11 +16,13 @@ use serpapi::Client;
 )]
 struct Cli {
     /// Your private SerpApi API key
-    #[arg(long, env = "SERPAPI_KEY")]
+    #[arg(long, env = "SERPAPI_KEY", hide_env_values = true)]
     api_key: String,
     // We'll add XML, and maybe other formats - human readable for instance?
     #[arg(long, conflicts_with_all = ["html"])]
+    /// JSON output (default)
     json: bool,
+    /// HTML output if available
     #[arg(long, conflicts_with_all = ["json"])]
     html: bool,
     /// Verbose output, specify more than once for more
