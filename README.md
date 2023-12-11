@@ -22,6 +22,8 @@ More installation options will become available as development progresses.
 
 ```
 $ serpapi-cli --help
+The official CLI client for SerpApi
+
 Usage: serpapi-cli [OPTIONS] --api-key <API_KEY> <COMMAND>
 
 Commands:
@@ -33,12 +35,14 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-      --api-key <API_KEY>  Your private SerpApi API key [env: SERPAPI_KEY]
-      --json               JSON output (default)
-      --html               HTML output if available
-  -v, --verbose...         Verbose output, specify more than once for more
-  -h, --help               Print help
-  -V, --version            Print version
+      --api-key <API_KEY>          Your private SerpApi API key [env: SERPAPI_KEY]
+      --json                       JSON output (default)
+  -j, --jsonpath <JSONPATH>        JSONPath expression for JSON mode
+  -p, --jsonpointer <JSONPOINTER>  JSONPointer expression for JSON mode
+      --html                       HTML output if available
+  -v, --verbose...                 Verbose output, specify more than once for more
+  -h, --help                       Print help
+  -V, --version                    Print version
 
 $ serpapi-cli search --help
 Perform a search
@@ -50,16 +54,26 @@ Arguments:
 
 Options:
   -h, --help  Print help
+
+# Set your API key in the environment
 $ export SERPAPI_KEY="..."
 
-$ serpapi-cli account | jq '.account_email, .plan_searches_left'
+# Extract specific elements using JSONPath
+$ serpapi-cli -j '$["account_email", "plan_searches_left"]' account
 "thomas@serpapi.com"
 30
 
-$ serpapi-cli location "Austin" | jq '.[0].canonical_name'
+# Or with multiple JSONPointer expressions
+$ serpapi-cli -p '/account_email' -p '/plan_searches_left' account
+"thomas@serpapi.com"
+30
+
+# Look up a location
+$ serpapi-cli -p /0/canonical_name location Austin
 "Austin,TX,Texas,United States"
 
-$ serpapi-cli search "serpapi" "location=Austin,TX,Texas,United States" | jq '.organic_results[0] | .link, .snippet'
+# Extract the first result from a search with a given location
+$  serpapi-cli -j '$.organic_results[0]["link", "snippet"]' search serpapi "location=Austin,TX,Texas,United States"
 "https://serpapi.com/"
 "SerpApi is a real-time API to access Google search results. We handle proxies, solve captchas, and parse all rich structured data for you."
 ```

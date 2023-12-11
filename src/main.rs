@@ -24,8 +24,11 @@ struct Cli {
     /// JSON output (default)
     json: bool,
     /// JSONPath expression for JSON mode
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "jsonpointer")]
     jsonpath: Option<JsonPath>,
+    /// JSONPointer expression for JSON mode
+    #[arg(short = 'p', long, conflicts_with = "jsonpath")]
+    jsonpointer: Vec<String>,
     /// HTML output if available
     #[arg(long, conflicts_with_all = ["json"])]
     html: bool,
@@ -127,6 +130,14 @@ fn render_json(args: &Cli, json: &serde_json::Value) -> Result<(), Box<dyn std::
     if let Some(path) = &args.jsonpath {
         for node in path.query(&json) {
             println!("{}", to_colored_json_auto(&node)?);
+        }
+    } else if !args.jsonpointer.is_empty() {
+        for pointer in &args.jsonpointer {
+            if let Some(node) = json.pointer(pointer) {
+                println!("{}", to_colored_json_auto(&node)?);
+            } else {
+                println!("null");
+            }
         }
     } else {
         println!("{}", to_colored_json_auto(&json)?);
