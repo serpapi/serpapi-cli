@@ -5,6 +5,7 @@ use clap::Parser;
 use color_eyre::Result;
 use colored_json::to_colored_json_auto;
 use html2text::render::text_renderer::RichAnnotation;
+use serde_json_path::JsonPath;
 use serpapi::Client;
 
 #[derive(Parser, Debug)]
@@ -22,6 +23,9 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["html"])]
     /// JSON output (default)
     json: bool,
+    /// JSONPath expression for JSON mode
+    #[arg(short, long)]
+    jsonpath: Option<JsonPath>,
     /// HTML output if available
     #[arg(long, conflicts_with_all = ["json"])]
     html: bool,
@@ -119,6 +123,17 @@ fn default_colour_map(annotation: &RichAnnotation) -> (String, String) {
     }
 }
 
+fn render_json(args: &Cli, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(path) = &args.jsonpath {
+        for node in path.query(&json) {
+            println!("{}", to_colored_json_auto(&node)?);
+        }
+    } else {
+        println!("{}", to_colored_json_auto(&json)?);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
@@ -127,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.api_key.clone(),
     )]));
 
-    match args.command {
+    match &args.command {
         Command::Search(search) => {
             let params = search
                 .params
@@ -140,7 +155,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", result);
             } else {
                 let result = client.search(params).await?;
-                println!("{}", to_colored_json_auto(&result)?);
+
+                render_json(&args, &result)?;
             }
         }
         Command::Location(location) => {
@@ -151,14 +167,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )]))
                 .await
                 .unwrap();
-            println!("{}", to_colored_json_auto(&result)?);
+            render_json(&args, &result)?;
         }
         Command::Archive(lookup) => {
             client.search_archive(&lookup.id).await?;
         }
         Command::Account => {
             let result = client.account(HashMap::new()).await?;
-            println!("{}", to_colored_json_auto(&result)?);
+            render_json(&args, &result)?;
         }
         Command::Docs(query) => {
             let body = reqwest::get(format!("https://serpapi.com/{}", query.query))

@@ -14,6 +14,7 @@ colored_json = "4.1.0"
 html2text = { version = "0.6.0", features = ["ansi_colours"] }
 reqwest = "0.11.22"
 serde_json = "1.0.108"
+serde_json_path = "0.6.4"
 serpapi = { version = "0.1.0", path = "../serpapi-rust" }
 termion = "2.0.3"
 tokio = { version = "1.35.0", features = ["full"] }
