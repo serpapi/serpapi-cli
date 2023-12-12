@@ -180,7 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             render_json(&args, &result)?;
         }
         Command::Archive(lookup) => {
-            client.search_archive(&lookup.id).await?;
+            let result = client.search_archive(&lookup.id).await?;
+            render_json(&args, &result)?;
         }
         Command::Account => {
             let result = client.account(HashMap::new()).await?;
