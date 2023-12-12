@@ -176,8 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "q".to_string(),
                     location.location.clone(),
                 )]))
-                .await
-                .unwrap();
+                .await?;
             render_json(&args, &result)?;
         }
         Command::Archive(lookup) => {
