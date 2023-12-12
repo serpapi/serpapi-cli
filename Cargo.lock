@@ -1172,6 +1172,7 @@ dependencies = [
 [[package]]
 name = "serpapi"
 version = "0.1.0"
+source = "git+https://github.com/serpapi/serpapi-rust.git?branch=serpapi-cli#435e7dc4d994974048392a1dc198938c4d159e0d"
 dependencies = [
  "reqwest",
  "serde_json",
