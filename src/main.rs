@@ -5,6 +5,7 @@ use clap::Parser;
 use color_eyre::Result;
 use colored_json::to_colored_json_auto;
 use html2text::render::text_renderer::RichAnnotation;
+use serde_json::Value;
 use serde_json_path::JsonPath;
 use serpapi::Client;
 
@@ -129,18 +130,26 @@ fn default_colour_map(annotation: &RichAnnotation) -> (String, String) {
     }
 }
 
-fn render_json(args: &Cli, json: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+fn render_json(args: &Cli, json: &Value) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = &args.jsonpath {
-        for node in path.query(&json) {
-            println!("{}", to_colored_json_auto(&node)?);
-        }
+        let filtered = Value::Array(path.query(&json).into_iter().cloned().collect());
+        println!("{}", to_colored_json_auto(&filtered)?);
     } else if !args.jsonpointer.is_empty() {
-        for pointer in &args.jsonpointer {
-            if let Some(node) = json.pointer(pointer) {
-                println!("{}", to_colored_json_auto(&node)?);
-            } else {
-                println!("null");
-            }
+        if args.jsonpointer.len() > 1 {
+            // If we have more than one query, return them as an array
+            let filtered = Value::Array(
+                args.jsonpointer
+                    .iter()
+                    .map(|p| json.pointer(p).unwrap_or_else(|| &Value::Null))
+                    .cloned()
+                    .collect(),
+            );
+            println!("{}", to_colored_json_auto(&filtered)?);
+        } else {
+            let node = json
+                .pointer(&args.jsonpointer[0])
+                .unwrap_or_else(|| &Value::Null);
+            println!("{}", to_colored_json_auto(&node)?);
         }
     } else {
         println!("{}", to_colored_json_auto(&json)?);
