@@ -61,6 +61,9 @@ struct Search {
 
 #[derive(Parser, Debug)]
 struct LocationLookup {
+    /// Optional limit
+    #[arg(short, long)]
+    limit: Option<u8>,
     /// Search for the given location
     location: String,
 }
@@ -172,10 +175,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Location(location) => {
             let result = client
-                .location(HashMap::from([(
-                    "q".to_string(),
-                    location.location.clone(),
-                )]))
+                .location(HashMap::from([
+                    ("q".to_string(), location.location.clone()),
+                    ("limit".to_string(), location.limit.unwrap_or(5).to_string()),
+                ]))
                 .await?;
             render_json(&args, &result)?;
         }
