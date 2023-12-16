@@ -60,22 +60,38 @@ $ export SERPAPI_KEY="..."
 
 # Extract specific elements using JSONPath
 $ serpapi-cli -j '$["account_email", "plan_searches_left"]' account
-"thomas@serpapi.com"
-30
+[
+  "thomas@serpapi.com",
+  0
+]
 
 # Or with multiple JSONPointer expressions
 $ serpapi-cli -p '/account_email' -p '/plan_searches_left' account
-"thomas@serpapi.com"
-30
+[
+  "thomas@serpapi.com",
+  0
+]
 
 # Look up a location
 $ serpapi-cli -p /0/canonical_name location Austin
 "Austin,TX,Texas,United States"
 
 # Extract the first result from a search with a given location
-$  serpapi-cli -j '$.organic_results[0]["link", "snippet"]' search serpapi "location=Austin,TX,Texas,United States"
-"https://serpapi.com/"
-"SerpApi is a real-time API to access Google search results. We handle proxies, solve captchas, and parse all rich structured data for you."
+$ serpapi-cli -j '$.organic_results[0]["link", "snippet"]' search serpapi "location=Austin,TX,Texas,United States"
+[
+  "https://serpapi.com/",
+  "SerpApi is a real-time API to access Google search results. We handle proxies, solve captchas, and parse all rich structured data for you."
+]
+
+# Find our social media accounts using Bing (with bonus random Wikipedia page)
+$ serpapi-cli -j '$.knowledge_graph.profiles[*].link' search serpapi engine=bing
+[
+  "https://www.facebook.com/serpapicom/",
+  "https://twitter.com/serp_api",
+  "https://instagram.com/serpapicom",
+  "https://youtube.com/channel/ucugihlybod3ya3ydirhg_mg",
+  "https://en.wikipedia.org/wiki/iso_3166-1"
+]
 ```
 
 [SerpApi]: https://serpapi.com/
