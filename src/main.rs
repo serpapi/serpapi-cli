@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             render_json(&args, &result)?;
         }
         Command::Account => {
-            let result = client.account(HashMap::new()).await?;
+            let result = client.account(&()).await?;
             render_json(&args, &result)?;
         }
         Command::Docs(query) => {
