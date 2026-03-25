@@ -1,0 +1,3 @@
+# Group imports: std, then third-party, then crate-local
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
