@@ -1,11 +1,5 @@
 use clap::Parser;
-
-mod commands;
-mod output;
-mod error;
-mod config;
-mod params;
-mod jq;
+use serpapi_cli::{commands, output, error, config, params, jq};
 
 #[derive(Parser, Debug)]
 #[command(

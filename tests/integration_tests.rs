@@ -11,12 +11,10 @@ mod config_tests {
     #[test]
     fn test_config_path_ends_with_serpapi_config() {
         let path = config::config_path();
-        let path_str = path.to_str().unwrap();
-        assert!(
-            path_str.ends_with("serpapi/config.toml"),
-            "config path should end with serpapi/config.toml, got: {}",
-            path_str
-        );
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        assert_eq!(file_name, "config.toml", "config path should end with config.toml, got: {:?}", path);
+        let parent_name = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("");
+        assert_eq!(parent_name, "serpapi", "config path parent dir should be serpapi, got: {:?}", path);
     }
 
     #[test]
@@ -60,8 +58,14 @@ mod config_tests {
 
         let result = config::resolve_api_key(None);
 
-        if let Some(h) = orig_home { std::env::set_var("HOME", h); }
-        if let Some(x) = orig_xdg { std::env::set_var("XDG_CONFIG_HOME", x); }
+        match orig_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        match orig_xdg {
+            Some(x) => std::env::set_var("XDG_CONFIG_HOME", x),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
         std::fs::remove_dir_all(&tmp).ok();
 
         assert_eq!(result.unwrap(), "file_key");
@@ -69,19 +73,27 @@ mod config_tests {
 
     #[test]
     fn test_resolve_api_key_missing_returns_error() {
-        // Point HOME to a temp dir so load_api_key() finds no config file
         let _guard = HOME_MUTEX.lock().unwrap();
         let tmp = std::env::temp_dir().join("serpapi_test_no_config");
         std::fs::create_dir_all(&tmp).ok();
         let orig_home = std::env::var("HOME").ok();
+        let orig_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("HOME", &tmp);
+        std::env::remove_var("XDG_CONFIG_HOME");
 
         let result = config::resolve_api_key(None);
 
         // Restore HOME
-        if let Some(h) = orig_home {
-            std::env::set_var("HOME", h);
+        match orig_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
         }
+        // Restore XDG_CONFIG_HOME
+        match orig_xdg {
+            Some(x) => std::env::set_var("XDG_CONFIG_HOME", x),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("No API key found"));
@@ -250,12 +262,19 @@ mod error_tests {
         let tmp = std::env::temp_dir().join("serpapi_test_no_key_usage");
         std::fs::create_dir_all(&tmp).ok();
         let orig_home = std::env::var("HOME").ok();
+        let orig_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("HOME", &tmp);
+        std::env::remove_var("XDG_CONFIG_HOME");
 
         let result = serpapi_cli::config::resolve_api_key(None);
 
-        if let Some(h) = orig_home {
-            std::env::set_var("HOME", h);
+        match orig_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        match orig_xdg {
+            Some(x) => std::env::set_var("XDG_CONFIG_HOME", x),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
         }
         std::fs::remove_dir_all(&tmp).ok();
 

@@ -8,20 +8,20 @@ pub struct Param {
 }
 
 impl FromStr for Param {
-    type Err = &'static str;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.splitn(2, '=');
         match (parts.next(), parts.next()) {
-            (Some(""), Some(_)) => Err("Empty parameter key"),
+            (Some(""), Some(_)) => Err("Empty parameter key".to_string()),
             (Some("api_key"), Some(_)) => {
-                Err("Use --api-key or SERPAPI_KEY instead of passing api_key as a parameter")
+                Err("Use --api-key or SERPAPI_KEY instead of passing api_key as a parameter".to_string())
             }
             (Some(key), Some(value)) => Ok(Self {
                 key: key.to_string(),
                 value: value.to_string(),
             }),
-            (Some(""), None) | (None, _) => Err("Empty parameter"),
+            (Some(""), None) | (None, _) => Err("Empty parameter".to_string()),
             (Some(value), None) => Ok(Self {
                 key: "q".to_string(),
                 value: value.to_string(),

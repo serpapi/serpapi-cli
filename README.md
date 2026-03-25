@@ -118,7 +118,7 @@ serpapi login
 - `--jq <expr>` — Client-side jq filter applied to JSON output (same as `gh --jq`)
 - `--api-key <key>` — Override API key (takes priority over environment and config file)
 - `--all-pages` — Fetch all result pages and merge array fields across pages
-- `--max-pages <n>` — When used with `--all-pages`, limit fetching to the first `n` pages
+- `--max-pages <n>` — Limit fetching to the first `n` pages when paginating (can be used with or without `--all-pages`)
 
 **⚠️ Important: Flag Position**
 

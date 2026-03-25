@@ -37,6 +37,7 @@ pub async fn run(
     let mut accumulated: Option<Value> = None;
     let mut seen: HashSet<String> = HashSet::new();
     let mut pages_fetched: usize = 0;
+    seen.insert(canonical_params_key(&current_params));
 
     loop {
         let result = tokio::time::timeout(

@@ -11,6 +11,12 @@ pub async fn run() -> Result<(), CliError> {
         })?;
     let api_key = api_key.trim();
 
+    if api_key.is_empty() {
+        return Err(CliError::UsageError {
+            message: "API key cannot be empty.".to_string(),
+        });
+    }
+
     let client = make_client(api_key)?;
     let result = client
         .account(HashMap::new())

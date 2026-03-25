@@ -70,7 +70,7 @@ fn test_account() {
 }
 
 #[test]
-#[ignore = "requires live SERPAPI_KEY env var"]
+#[ignore = "requires live SerpAPI locations API (network access)"]
 fn test_locations() {
     cargo_bin_cmd!("serpapi")
         .arg("--json")
@@ -99,26 +99,25 @@ fn test_archive() {
 
     if search_output.status.success() {
         let output_str = String::from_utf8_lossy(&search_output.stdout);
-        if let Some(search_id_start) = output_str.find("search_id") {
-            if let Some(quote_start) = output_str[search_id_start..].find('"') {
-                let after_quote = search_id_start + quote_start + 1;
-                if let Some(quote_end) = output_str[after_quote..].find('"') {
-                    let search_id = &output_str[after_quote..after_quote + quote_end];
-                    if !search_id.is_empty() && search_id != "search_id" {
-                        cargo_bin_cmd!("serpapi")
-                            .arg("--api-key")
-                            .arg(&api_key)
-                            .arg("--json")
-                            .arg("archive")
-                            .arg(search_id)
-                            .assert()
-                            .success()
-                            .stdout(
-                                predicate::str::contains("search_metadata")
-                                    .or(predicate::str::contains("search_parameters")),
-                            );
-                    }
-                }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&output_str) {
+            let search_id = json
+                .get("search_metadata")
+                .and_then(|m| m.get("id"))
+                .and_then(|id| id.as_str())
+                .unwrap_or("");
+            if !search_id.is_empty() {
+                cargo_bin_cmd!("serpapi")
+                    .arg("--api-key")
+                    .arg(&api_key)
+                    .arg("--json")
+                    .arg("archive")
+                    .arg(search_id)
+                    .assert()
+                    .success()
+                    .stdout(
+                        predicate::str::contains("search_metadata")
+                            .or(predicate::str::contains("search_parameters")),
+                    );
             }
         }
     }

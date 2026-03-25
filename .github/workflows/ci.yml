@@ -42,7 +42,7 @@ jobs:
         run: cargo clippy -- -D warnings
       
       - name: Run unit tests
-        run: cargo test --lib --bins
+        run: cargo test --all-targets
 
   e2e-test:
     name: E2E Test

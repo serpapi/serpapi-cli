@@ -10,6 +10,7 @@
 //! - [`params`] — Query parameter parsing (`key=value` syntax)
 //! - [`jq`] — Client-side jq filtering via the `jaq` library
 
+pub mod commands;
 pub mod config;
 pub mod error;
 pub mod output;
