@@ -136,7 +136,8 @@ fn test_search_all_pages() {
         .arg("q=coffee")
         .arg("num=1")
         .arg("--all-pages")
-        .arg("--max-pages").arg("2")
+        .arg("--max-pages")
+        .arg("2")
         .assert()
         .success()
         .stdout(predicate::str::contains("organic_results"));

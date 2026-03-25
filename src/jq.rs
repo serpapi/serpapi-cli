@@ -24,7 +24,10 @@ pub fn apply(expression: &str, input: Value) -> Result<Vec<Value>, Box<dyn std::
     let inputs = RcIter::new(std::iter::empty());
     let out: Vec<Value> = filter
         .run((Ctx::new(Vec::new(), &inputs), Val::from(input)))
-        .map(|v| v.map(Value::from).map_err(|e| format!("jq runtime error: {e}")))
+        .map(|v| {
+            v.map(Value::from)
+                .map_err(|e| format!("jq runtime error: {e}"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(out)

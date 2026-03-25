@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct Param {
@@ -14,9 +14,10 @@ impl FromStr for Param {
         let mut parts = s.splitn(2, '=');
         match (parts.next(), parts.next()) {
             (Some(""), Some(_)) => Err("Empty parameter key".to_string()),
-            (Some("api_key"), Some(_)) => {
-                Err("Use --api-key or SERPAPI_KEY instead of passing api_key as a parameter".to_string())
-            }
+            (Some("api_key"), Some(_)) => Err(
+                "Use --api-key or SERPAPI_KEY instead of passing api_key as a parameter"
+                    .to_string(),
+            ),
             (Some(key), Some(value)) => Ok(Self {
                 key: key.to_string(),
                 value: value.to_string(),
@@ -30,12 +31,8 @@ impl FromStr for Param {
     }
 }
 
-
 pub fn params_to_hashmap(params: Vec<Param>) -> HashMap<String, String> {
-    params
-        .into_iter()
-        .map(|p| (p.key, p.value))
-        .collect()
+    params.into_iter().map(|p| (p.key, p.value)).collect()
 }
 
 pub fn apply_fields(params: &mut HashMap<String, String>, fields: Option<&str>) {

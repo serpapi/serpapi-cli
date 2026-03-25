@@ -1,5 +1,5 @@
 use clap::Parser;
-use serpapi_cli::{commands, output, error, config, params, jq};
+use serpapi_cli::{commands, config, error, jq, output, params};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -65,27 +65,44 @@ async fn main() {
     let resolve_api_key = || config::resolve_api_key(cli.api_key.as_deref());
 
     let result = match cli.command {
-        Command::Search { params, all_pages, max_pages } => {
+        Command::Search {
+            params,
+            all_pages,
+            max_pages,
+        } => {
             let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
-            let parsed_params = params.iter()
+            let parsed_params = params
+                .iter()
                 .map(|s| s.parse::<params::Param>())
                 .collect::<Result<Vec<_>, _>>()
-                .unwrap_or_else(|e| die(error::CliError::UsageError {
-                    message: e.to_string(),
-                }));
-            commands::search::run(parsed_params, &api_key, cli.fields.as_deref(), all_pages, max_pages).await
+                .unwrap_or_else(|e| {
+                    die(error::CliError::UsageError {
+                        message: e.to_string(),
+                    })
+                });
+            commands::search::run(
+                parsed_params,
+                &api_key,
+                cli.fields.as_deref(),
+                all_pages,
+                max_pages,
+            )
+            .await
         }
         Command::Account => {
             let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
             commands::account::run(&api_key).await
         }
         Command::Locations { params } => {
-            let parsed_params = params.iter()
+            let parsed_params = params
+                .iter()
                 .map(|s| s.parse::<params::Param>())
                 .collect::<Result<Vec<_>, _>>()
-                .unwrap_or_else(|e| die(error::CliError::UsageError {
-                    message: e.to_string(),
-                }));
+                .unwrap_or_else(|e| {
+                    die(error::CliError::UsageError {
+                        message: e.to_string(),
+                    })
+                });
             commands::locations::run(parsed_params).await
         }
         Command::Archive { id } => {
@@ -103,10 +120,11 @@ async fn main() {
     match result {
         Ok(value) => {
             if let Some(expr) = cli.jq.as_deref() {
-                let results = jq::apply(expr, value)
-                    .unwrap_or_else(|e| die(error::CliError::UsageError {
+                let results = jq::apply(expr, value).unwrap_or_else(|e| {
+                    die(error::CliError::UsageError {
                         message: e.to_string(),
-                    }));
+                    })
+                });
                 for v in &results {
                     if let Err(e) = output::print_jq_value(v, &mut std::io::stdout()) {
                         die(error::CliError::ApiError {

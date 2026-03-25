@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
-use url::Url;
 use crate::commands::{check_api_error, make_client, network_err, API_KEY_PARAM};
 use crate::error::CliError;
 use crate::params::{self, Param};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+use url::Url;
 
 /// Execute a SerpApi search, optionally accumulating all pages into a single result.
 pub async fn run(
@@ -19,13 +19,12 @@ pub async fn run(
 
     if !all_pages && max_pages.is_none() {
         let client = make_client(api_key)?;
-        let result = tokio::time::timeout(
-            Duration::from_secs(30),
-            client.search(params_map),
-        )
-        .await
-        .map_err(|_| CliError::NetworkError { message: "Request timed out after 30s".to_string() })?
-        .map_err(network_err)?;
+        let result = tokio::time::timeout(Duration::from_secs(30), client.search(params_map))
+            .await
+            .map_err(|_| CliError::NetworkError {
+                message: "Request timed out after 30s".to_string(),
+            })?
+            .map_err(network_err)?;
         return check_api_error(result);
     }
 
@@ -45,7 +44,9 @@ pub async fn run(
             client.search(current_params.clone()),
         )
         .await
-        .map_err(|_| CliError::NetworkError { message: "Request timed out after 30s".to_string() })?
+        .map_err(|_| CliError::NetworkError {
+            message: "Request timed out after 30s".to_string(),
+        })?
         .map_err(network_err)?;
         let page = check_api_error(result)?;
         pages_fetched += 1;
@@ -67,8 +68,12 @@ pub async fn run(
                             // are kept from the first page, as they describe the overall
                             // query rather than per-page state.
                             match acc_map.get_mut(key) {
-                                Some(Value::Array(existing)) => existing.extend(new_items.iter().cloned()),
-                                _ => { acc_map.insert(key.clone(), val.clone()); }
+                                Some(Value::Array(existing)) => {
+                                    existing.extend(new_items.iter().cloned())
+                                }
+                                _ => {
+                                    acc_map.insert(key.clone(), val.clone());
+                                }
                             }
                         }
                     }

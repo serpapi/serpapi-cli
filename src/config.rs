@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 struct Config {
@@ -43,10 +43,9 @@ pub fn save_config(api_key: &str) -> Result<(), crate::error::CliError> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| crate::error::CliError::UsageError {
-                message: format!("Failed to create config dir: {e}"),
-            })?;
+        std::fs::create_dir_all(&dir).map_err(|e| crate::error::CliError::UsageError {
+            message: format!("Failed to create config dir: {e}"),
+        })?;
     }
 
     let config = Config {
@@ -69,7 +68,8 @@ pub fn save_config(api_key: &str) -> Result<(), crate::error::CliError> {
             .mode(0o600)
             .open(&tmp_path)
             .map_err(|e| to_cli_err(&e))?;
-        file.write_all(content.as_bytes()).map_err(|e| to_cli_err(&e))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| to_cli_err(&e))?;
     }
     #[cfg(not(unix))]
     {
@@ -89,17 +89,15 @@ pub fn save_config(api_key: &str) -> Result<(), crate::error::CliError> {
 
 /// Resolve the API key from the already-merged clap value (flag or env var), then
 /// fall back to the saved config file. The env-var lookup is handled by clap upstream.
-pub fn resolve_api_key(
-    from_clap: Option<&str>,
-) -> Result<String, crate::error::CliError> {
+pub fn resolve_api_key(from_clap: Option<&str>) -> Result<String, crate::error::CliError> {
     if let Some(key) = from_clap {
         return Ok(key.to_string());
     }
-    
+
     if let Some(key) = load_api_key() {
         return Ok(key);
     }
-    
+
     Err(crate::error::CliError::UsageError {
         message: "No API key found. Run 'serpapi login' or set SERPAPI_KEY.".to_string(),
     })

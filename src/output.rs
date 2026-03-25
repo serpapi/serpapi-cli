@@ -17,7 +17,10 @@ pub fn print_json(value: &Value, plain: bool) -> Result<(), Box<dyn std::error::
 /// Print a jq result value with raw scalar output (like gh --jq / jq -r).
 /// Strings are printed unquoted, numbers as plain text, booleans as true/false,
 /// null as empty string. Objects and arrays are JSON-encoded.
-pub fn print_jq_value(value: &Value, writer: &mut impl std::io::Write) -> Result<(), Box<dyn std::error::Error>> {
+pub fn print_jq_value(
+    value: &Value,
+    writer: &mut impl std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
     match value {
         Value::String(s) => writeln!(writer, "{s}")?,
         Value::Number(n) => writeln!(writer, "{n}")?,

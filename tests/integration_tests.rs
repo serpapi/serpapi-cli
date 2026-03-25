@@ -5,16 +5,28 @@ use std::collections::HashMap;
 static HOME_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod config_tests {
-    use serpapi_cli::config;
     use super::HOME_MUTEX;
+    use serpapi_cli::config;
 
     #[test]
     fn test_config_path_ends_with_serpapi_config() {
         let path = config::config_path();
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        assert_eq!(file_name, "config.toml", "config path should end with config.toml, got: {:?}", path);
-        let parent_name = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("");
-        assert_eq!(parent_name, "serpapi", "config path parent dir should be serpapi, got: {:?}", path);
+        assert_eq!(
+            file_name, "config.toml",
+            "config path should end with config.toml, got: {:?}",
+            path
+        );
+        let parent_name = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        assert_eq!(
+            parent_name, "serpapi",
+            "config path parent dir should be serpapi, got: {:?}",
+            path
+        );
     }
 
     #[test]
@@ -181,8 +193,14 @@ mod params_tests {
         // Document the "last wins" behavior of params_to_hashmap with duplicate keys.
         // HashMap keeps the last-inserted value for duplicate keys.
         let params = vec![
-            Param { key: "q".to_string(), value: "first".to_string() },
-            Param { key: "q".to_string(), value: "second".to_string() },
+            Param {
+                key: "q".to_string(),
+                value: "first".to_string(),
+            },
+            Param {
+                key: "q".to_string(),
+                value: "second".to_string(),
+            },
         ];
         let map = params_to_hashmap(params);
         assert_eq!(map.get("q"), Some(&"second".to_string()));
@@ -249,7 +267,9 @@ mod error_tests {
         assert!(result.is_err());
         // The error message should be wrappable into a UsageError as the fix does
         let err_msg = result.unwrap_err().to_string();
-        let usage_err = CliError::UsageError { message: err_msg.clone() };
+        let usage_err = CliError::UsageError {
+            message: err_msg.clone(),
+        };
         let display = format!("{}", usage_err);
         assert!(display.contains("Usage error"));
         assert!(display.contains(&err_msg));
@@ -353,7 +373,6 @@ mod output_tests {
         assert!(s.contains('5'));
     }
 }
-
 
 mod print_jq_value_tests {
     use super::*;
@@ -546,19 +565,31 @@ mod jq_tests {
 
     #[test]
     fn test_jq_select_fields() {
-        let result = jq::apply("{name, age}", json!({"name": "test", "age": 30, "extra": true})).unwrap();
+        let result = jq::apply(
+            "{name, age}",
+            json!({"name": "test", "age": 30, "extra": true}),
+        )
+        .unwrap();
         assert_eq!(result, vec![json!({"name": "test", "age": 30})]);
     }
 
     #[test]
     fn test_jq_pipe() {
-        let result = jq::apply(".items | length", json!({"items": [{"name": "a"}, {"name": "b"}]})).unwrap();
+        let result = jq::apply(
+            ".items | length",
+            json!({"items": [{"name": "a"}, {"name": "b"}]}),
+        )
+        .unwrap();
         assert_eq!(result, vec![json!(2)]);
     }
 
     #[test]
     fn test_jq_map() {
-        let result = jq::apply("[.items[] | .name]", json!({"items": [{"name": "a", "v": 1}, {"name": "b", "v": 2}]})).unwrap();
+        let result = jq::apply(
+            "[.items[] | .name]",
+            json!({"items": [{"name": "a", "v": 1}, {"name": "b", "v": 2}]}),
+        )
+        .unwrap();
         assert_eq!(result, vec![json!(["a", "b"])]);
     }
 
@@ -571,7 +602,11 @@ mod jq_tests {
 
     #[test]
     fn test_jq_multiple_outputs() {
-        let result = jq::apply(".items[].name", json!({"items": [{"name": "a"}, {"name": "b"}, {"name": "c"}]})).unwrap();
+        let result = jq::apply(
+            ".items[].name",
+            json!({"items": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}),
+        )
+        .unwrap();
         assert_eq!(result, vec![json!("a"), json!("b"), json!("c")]);
     }
 
@@ -606,8 +641,8 @@ mod error_code_tests {
 }
 
 mod print_jq_value_output_tests {
-    use serpapi_cli::output::print_jq_value;
     use serde_json::json;
+    use serpapi_cli::output::print_jq_value;
 
     fn capture(value: serde_json::Value) -> String {
         let mut buf = Vec::new();

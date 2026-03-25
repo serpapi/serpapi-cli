@@ -13,6 +13,6 @@
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod jq;
 pub mod output;
 pub mod params;
-pub mod jq;

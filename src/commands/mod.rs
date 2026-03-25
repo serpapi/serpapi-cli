@@ -4,18 +4,20 @@ use std::collections::HashMap;
 
 use crate::error::CliError;
 
-pub mod search;
 pub mod account;
-pub mod locations;
 pub mod archive;
+pub mod locations;
 pub mod login;
+pub mod search;
 
 /// The query-parameter name used to pass the SerpApi key to every request.
 pub(crate) const API_KEY_PARAM: &str = "api_key";
 
 /// Convert a `Box<dyn Error>` from the serpapi client into a [`CliError::NetworkError`].
 pub(crate) fn network_err(e: Box<dyn std::error::Error>) -> CliError {
-    CliError::NetworkError { message: e.to_string() }
+    CliError::NetworkError {
+        message: e.to_string(),
+    }
 }
 
 /// Build a `serpapi::Client` authenticated with the given API key.

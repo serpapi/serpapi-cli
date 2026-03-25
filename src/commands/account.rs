@@ -6,9 +6,6 @@ use std::collections::HashMap;
 /// Fetch and return the account information for the given API key.
 pub async fn run(api_key: &str) -> Result<Value, CliError> {
     let client = make_client(api_key)?;
-    let result = client
-        .account(HashMap::new())
-        .await
-        .map_err(network_err)?;
+    let result = client.account(HashMap::new()).await.map_err(network_err)?;
     check_api_error(result)
 }

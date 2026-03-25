@@ -33,6 +33,12 @@ fn test_cycle_detection_with_reordered_params_is_documented_as_fixed() {
     let key2 = canonical_key(page2_params);
 
     // With canonical (sorted) keys, both produce the same key — cycle is detected.
-    assert_eq!(key1, key2, "canonical keys should be equal regardless of param order");
-    assert!(seen.contains(&key2), "cycle should be detected even with reordered params");
+    assert_eq!(
+        key1, key2,
+        "canonical keys should be equal regardless of param order"
+    );
+    assert!(
+        seen.contains(&key2),
+        "cycle should be detected even with reordered params"
+    );
 }

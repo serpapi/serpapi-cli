@@ -5,10 +5,11 @@ use std::collections::HashMap;
 
 /// Prompt the user for their SerpApi API key, verify it, and persist it to the config file.
 pub async fn run() -> Result<(), CliError> {
-    let api_key = rpassword::prompt_password("Enter your SerpApi API key: ")
-        .map_err(|e| CliError::UsageError {
+    let api_key = rpassword::prompt_password("Enter your SerpApi API key: ").map_err(|e| {
+        CliError::UsageError {
             message: format!("Failed to read input: {e}"),
-        })?;
+        }
+    })?;
     let api_key = api_key.trim();
 
     if api_key.is_empty() {
@@ -18,10 +19,7 @@ pub async fn run() -> Result<(), CliError> {
     }
 
     let client = make_client(api_key)?;
-    let result = client
-        .account(HashMap::new())
-        .await
-        .map_err(network_err)?;
+    let result = client.account(HashMap::new()).await.map_err(network_err)?;
 
     let result = check_api_error(result)?;
     let email = result

@@ -52,8 +52,10 @@ pub fn print_error(err: &CliError) {
 
     match serde_json::to_string_pretty(&error_json) {
         Ok(s) => eprintln!("{s}"),
-        Err(_) => eprintln!("{{\"error\":{{\"code\":\"{code}\",\"message\":\"{}\"}}}}",
-            message.replace('\\', "\\\\").replace('"', "\\\"")),
+        Err(_) => eprintln!(
+            "{{\"error\":{{\"code\":\"{code}\",\"message\":\"{}\"}}}}",
+            message.replace('\\', "\\\\").replace('"', "\\\"")
+        ),
     }
 }
 
