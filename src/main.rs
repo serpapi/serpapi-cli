@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-use std::str::FromStr;
-
 use clap::Parser;
-use color_eyre::Result;
-use colored_json::to_colored_json_auto;
-use html2text::render::text_renderer::RichAnnotation;
-use serde_json::Value;
-use serde_json_path::JsonPath;
-use serpapi::Client;
+
+mod commands;
+mod output;
+mod error;
+mod config;
+mod params;
+mod jq;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -17,200 +15,117 @@ use serpapi::Client;
     infer_subcommands = true
 )]
 struct Cli {
-    /// Your private SerpApi API key
+    /// API key. Clap also reads this from the SERPAPI_KEY env var automatically.
     #[arg(long, env = "SERPAPI_KEY", hide_env_values = true)]
-    api_key: String,
-    // We'll add XML, and maybe other formats - human readable for instance?
-    #[arg(long, conflicts_with_all = ["html"])]
-    /// JSON output (default)
+    api_key: Option<String>,
+
+    /// Plain JSON output without ANSI color (for AI agents and pipelines)
+    #[arg(long)]
     json: bool,
-    /// JSONPath expression for JSON mode
-    #[arg(short, long, conflicts_with = "jsonpointer")]
-    jsonpath: Option<JsonPath>,
-    /// JSONPointer expression for JSON mode
-    #[arg(short = 'p', long, conflicts_with = "jsonpath")]
-    jsonpointer: Vec<String>,
-    /// HTML output if available
-    #[arg(long, conflicts_with_all = ["json"])]
-    html: bool,
-    /// Verbose output, specify more than once for more
-    #[arg(long, short, action = clap::ArgAction::Count)]
-    verbose: u8,
+
+    /// Server-side field filtering (SerpApi json_restrictor parameter)
+    #[arg(long)]
+    fields: Option<String>,
+
+    /// Client-side jq filter applied to JSON output (like gh --jq)
+    #[arg(long)]
+    jq: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Parser, Debug)]
+#[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Perform a search
-    Search(Search),
-    /// Retrieve a previously made search
-    Archive(ArchiveLookup),
-    /// Perform a SerpApi location API lookup
-    Location(LocationLookup),
-    /// Retrieve SerpApi account data
+    Search {
+        params: Vec<String>,
+        /// Fetch all pages and merge array results
+        #[arg(long)]
+        all_pages: bool,
+        /// Maximum number of pages to fetch; implies pagination (default: unlimited with --all-pages)
+        #[arg(long)]
+        max_pages: Option<usize>,
+    },
     Account,
-    /// Search SerpApi documentation
-    Docs(Docs),
+    Locations {
+        params: Vec<String>,
+    },
+    Archive {
+        id: String,
+    },
+    Login,
 }
 
-#[derive(Parser, Debug)]
-struct Search {
-    /// A key=value parameter pair, or a value for the q parameter
-    params: Vec<Param>,
+/// Print a structured error to stderr and exit with the appropriate code.
+fn die(e: error::CliError) -> ! {
+    error::print_error(&e);
+    std::process::exit(error::exit_code(&e));
 }
 
-#[derive(Parser, Debug)]
-struct LocationLookup {
-    /// Optional limit
-    #[arg(short, long)]
-    limit: Option<u8>,
-    /// Search for the given location
-    location: String,
-}
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let cli = Cli::parse();
 
-#[derive(Parser, Debug)]
-struct ArchiveLookup {
-    /// Retrieve the given search by ID
-    id: String,
-}
+    // clap already merges --api-key and SERPAPI_KEY into cli.api_key.
+    // resolve_api_key falls back to the saved config file if neither is set.
+    let resolve_api_key = || config::resolve_api_key(cli.api_key.as_deref());
 
-#[derive(Parser, Debug)]
-struct AccountLookup;
-
-#[derive(Parser, Debug)]
-struct Docs {
-    query: String,
-}
-
-#[derive(Debug, Clone)]
-struct Param {
-    key: String,
-    value: String,
-}
-
-impl FromStr for Param {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.splitn(2, '=');
-        match (parts.next(), parts.next()) {
-            (Some(key), Some(value)) => Ok(Self {
-                key: key.to_string(),
-                value: value.to_string(),
-            }),
-            (Some(value), None) => Ok(Self {
-                key: "q".to_string(),
-                value: value.to_string(),
-            }),
-            _ => Err("Empty parameter"),
-        }
-    }
-}
-
-// from rust-html2text
-fn default_colour_map(annotation: &RichAnnotation) -> (String, String) {
-    use termion::color::*;
-    use RichAnnotation::*;
-    match annotation {
-        Default => ("".into(), "".into()),
-        Link(_) => (
-            format!("{}", termion::style::Underline),
-            format!("{}", termion::style::Reset),
-        ),
-        Image(_) => (format!("{}", Fg(Blue)), format!("{}", Fg(Reset))),
-        Emphasis => (
-            format!("{}", termion::style::Bold),
-            format!("{}", termion::style::Reset),
-        ),
-        Strong => (format!("{}", Fg(LightYellow)), format!("{}", Fg(Reset))),
-        Strikeout => (format!("{}", Fg(LightBlack)), format!("{}", Fg(Reset))),
-        Code => (format!("{}", Fg(Blue)), format!("{}", Fg(Reset))),
-        Preformat(_) => (format!("{}", Fg(Blue)), format!("{}", Fg(Reset))),
-    }
-}
-
-fn render_json(args: &Cli, json: &Value) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(path) = &args.jsonpath {
-        let filtered = Value::Array(path.query(&json).into_iter().cloned().collect());
-        println!("{}", to_colored_json_auto(&filtered)?);
-    } else if !args.jsonpointer.is_empty() {
-        if args.jsonpointer.len() > 1 {
-            // If we have more than one query, return them as an array
-            let filtered = Value::Array(
-                args.jsonpointer
-                    .iter()
-                    .map(|p| json.pointer(p).unwrap_or_else(|| &Value::Null))
-                    .cloned()
-                    .collect(),
-            );
-            println!("{}", to_colored_json_auto(&filtered)?);
-        } else {
-            let node = json
-                .pointer(&args.jsonpointer[0])
-                .unwrap_or_else(|| &Value::Null);
-            println!("{}", to_colored_json_auto(&node)?);
-        }
-    } else {
-        println!("{}", to_colored_json_auto(&json)?);
-    }
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Cli::parse();
-    let client = Client::new(HashMap::from([(
-        "api_key".to_string(),
-        args.api_key.clone(),
-    )]));
-
-    match &args.command {
-        Command::Search(search) => {
-            let params = search
-                .params
-                .iter()
-                .map(|param| (param.key.to_string(), param.value.to_string()))
-                .collect::<HashMap<_, _>>();
-
-            if args.html {
-                let result = client.html(params).await?;
-                println!("{}", result);
-            } else {
-                let result = client.search(params).await?;
-
-                render_json(&args, &result)?;
-            }
-        }
-        Command::Location(location) => {
-            let result = client
-                .location(HashMap::from([
-                    ("q".to_string(), location.location.clone()),
-                    ("limit".to_string(), location.limit.unwrap_or(5).to_string()),
-                ]))
-                .await?;
-            render_json(&args, &result)?;
-        }
-        Command::Archive(lookup) => {
-            let result = client.search_archive(&lookup.id).await?;
-            render_json(&args, &result)?;
+    let result = match cli.command {
+        Command::Search { params, all_pages, max_pages } => {
+            let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
+            let parsed_params = params.iter()
+                .map(|s| s.parse::<params::Param>())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_or_else(|e| die(error::CliError::UsageError {
+                    message: e.to_string(),
+                }));
+            commands::search::run(parsed_params, &api_key, cli.fields.as_deref(), all_pages, max_pages).await
         }
         Command::Account => {
-            let result = client.account(&()).await?;
-            render_json(&args, &result)?;
+            let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
+            commands::account::run(&api_key).await
         }
-        Command::Docs(query) => {
-            let body = reqwest::get(format!("https://serpapi.com/{}", query.query))
-                .await?
-                .bytes()
-                .await?;
+        Command::Locations { params } => {
+            let parsed_params = params.iter()
+                .map(|s| s.parse::<params::Param>())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_or_else(|e| die(error::CliError::UsageError {
+                    message: e.to_string(),
+                }));
+            commands::locations::run(parsed_params).await
+        }
+        Command::Archive { id } => {
+            let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
+            commands::archive::run(&id, &api_key).await
+        }
+        Command::Login => {
+            if let Err(e) = commands::login::run().await {
+                die(e);
+            }
+            return;
+        }
+    };
 
-            println!(
-                "{}",
-                html2text::from_read_coloured(&body[..], 80, default_colour_map)?
-            );
+    match result {
+        Ok(value) => {
+            if let Some(expr) = cli.jq.as_deref() {
+                let results = jq::apply(expr, value)
+                    .unwrap_or_else(|e| die(error::CliError::UsageError {
+                        message: e.to_string(),
+                    }));
+                for v in &results {
+                    if let Err(e) = output::print_jq_value(v, &mut std::io::stdout()) {
+                        die(error::CliError::ApiError {
+                            message: format!("Output error: {e}"),
+                        });
+                    }
+                }
+            } else if let Err(e) = output::print_json(&value, cli.json) {
+                die(error::CliError::ApiError {
+                    message: format!("Output error: {e}"),
+                });
+            }
         }
+        Err(e) => die(e),
     }
-
-    Ok(())
 }
