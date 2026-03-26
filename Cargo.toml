@@ -52,9 +52,7 @@ targets = []
 assert_cmd = "2"
 predicates = "3"
 
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
+[profile.release]
 lto = true
 codegen-units = 1
 strip = "symbols"
