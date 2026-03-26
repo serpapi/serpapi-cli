@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["OPENSSL_STATIC", "OPENSSL_VENDORED"]

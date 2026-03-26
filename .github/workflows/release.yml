@@ -68,7 +68,8 @@ jobs:
       - name: Build
         shell: bash
         env:
-          OPENSSL_STATIC: ${{ matrix.use_cross == 'true' && '1' || '' }}
+          OPENSSL_STATIC: "1"
+          OPENSSL_VENDORED: "1"
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
