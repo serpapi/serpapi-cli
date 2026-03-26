@@ -53,7 +53,6 @@ jobs:
             use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            install_perl: true
     steps:
       - uses: actions/checkout@v6
 
@@ -61,9 +60,8 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Prepend Strawberry Perl to PATH (Windows)
-        if: matrix.install_perl
-        shell: bash
-        run: echo "C:/Strawberry/perl/bin" >> "$GITHUB_PATH"
+        if: runner.os == 'Windows'
+        run: echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install cross
         if: matrix.use_cross
@@ -72,13 +70,13 @@ jobs:
           tool: cross
 
       - name: Build
+        if: "!matrix.use_cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross
         shell: bash
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package and checksum
         id: package
