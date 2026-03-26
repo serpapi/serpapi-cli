@@ -2,27 +2,57 @@
 name = "serpapi-cli"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"
 authors = ["Thomas Hurst <thomas@serpapi.com>"]
 license = "MIT"
+description = "Official CLI client for SerpApi — fast search scraping for humans and AI agents"
+repository = "https://github.com/serpapi/serpapi-cli"
+homepage = "https://serpapi.com"
+documentation = "https://github.com/serpapi/serpapi-cli#readme"
+readme = "README.md"
+keywords = ["serpapi", "search", "scraping", "cli", "google"]
+categories = ["command-line-utilities", "web-programming::http-client"]
+include = [
+    "src/**/*",
+    "tests/**/*",
+    "README.md",
+    "LICENSE",
+    "Cargo.toml",
+]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "serpapi"
+path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.4.11", features = ["derive", "env"] }
-color-eyre = "0.6.2"
-colored_json = "4.1.0"
-html2text = { version = "0.6.0", features = ["ansi_colours"] }
-reqwest = "0.11.22"
-serde = { version = "1.0.193", features = ["derive"] }
-serde_json = "1.0.108"
-serde_json_path = "0.6.4"
-serpapi = { version = "0.1.0", git = "https://github.com/serpapi/serpapi-rust.git", branch="serpapi-cli" }
-termion = "2.0.3"
-textwrap = "0.16.0"
-tokio = { version = "1.35.0", features = ["full"] }
-zstd = "0.13.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+colored_json = "4.1"
+dirs = "5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serpapi = "1.1.0"
+thiserror = "2"
+rpassword = "7"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+toml = "0.8"
+url = "2"
+jaq-core = "1.5"
+jaq-interpret = "1.5"
+jaq-parse = "1.0"
+jaq-std = "1.6"
 
 [package.metadata.docs.rs]
-# Docs are identical across targets.
 targets = []
 
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
