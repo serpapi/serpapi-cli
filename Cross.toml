@@ -1,13 +1,5 @@
-[build.env]
-passthrough = ["OPENSSL_VENDORED"]
+[target.aarch64-unknown-linux-gnu]
+pre-build = ["apt-get update && apt-get install -y perl"]
 
 [target.x86_64-unknown-linux-musl]
-pre-build = [
-  "apt-get update && apt-get install -y perl libssl-dev",
-]
-
-[target.aarch64-unknown-linux-gnu]
-pre-build = [
-  "dpkg --add-architecture $CROSS_DEB_ARCH",
-  "apt-get update && apt-get install -y perl libssl-dev:$CROSS_DEB_ARCH",
-]
+pre-build = ["apt-get update && apt-get install -y perl"]

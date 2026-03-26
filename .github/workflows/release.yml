@@ -67,8 +67,6 @@ jobs:
 
       - name: Build
         shell: bash
-        env:
-          OPENSSL_VENDORED: "1"
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
