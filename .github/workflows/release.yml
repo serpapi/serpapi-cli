@@ -60,9 +60,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install Strawberry Perl (Windows)
+      - name: Prepend Strawberry Perl to PATH (Windows)
         if: matrix.install_perl
-        run: choco install strawberryperl
+        shell: bash
+        run: echo "C:/Strawberry/perl/bin" >> "$GITHUB_PATH"
 
       - name: Install cross
         if: matrix.use_cross
