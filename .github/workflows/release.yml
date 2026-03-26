@@ -53,11 +53,18 @@ jobs:
             use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            install_perl: true
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         run: rustup target add ${{ matrix.target }}
+
+      - name: Install Strawberry Perl (Windows)
+        if: matrix.install_perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: "5.38"
 
       - name: Install cross
         if: matrix.use_cross
