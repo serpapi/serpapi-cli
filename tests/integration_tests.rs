@@ -262,17 +262,13 @@ mod error_tests {
 
     #[test]
     fn test_param_parse_error_produces_usage_error() {
-        // "=value" has an empty key; parsing must fail
+        // "=value" has an empty key; parsing must fail with a CliError directly
         let result: Result<Param, _> = "=value".parse();
         assert!(result.is_err());
-        // The error message should be wrappable into a UsageError as the fix does
-        let err_msg = result.unwrap_err().to_string();
-        let usage_err = CliError::UsageError {
-            message: err_msg.clone(),
-        };
-        let display = format!("{}", usage_err);
+        let err = result.unwrap_err();
+        let display = format!("{}", err);
         assert!(display.contains("Usage error"));
-        assert!(display.contains(&err_msg));
+        assert!(display.contains("Empty parameter key"));
     }
 
     #[test]

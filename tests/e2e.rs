@@ -167,7 +167,7 @@ fn test_no_args() {
 }
 
 #[test]
-#[ignore = "requires live SERPAPI_KEY env var"]
+#[ignore = "requires live SERPAPI_KEY env var and network access"]
 fn test_login_flow() {
     let api_key = env::var("SERPAPI_KEY").expect("SERPAPI_KEY not set");
     let config_dir = serpapi_cli::config::config_dir();

@@ -36,7 +36,7 @@ enum Command {
         /// Fetch all pages and merge array results
         #[arg(long)]
         all_pages: bool,
-        /// Maximum number of pages to fetch; implies pagination (default: unlimited with --all-pages)
+        /// Maximum number of pages to fetch when paginating with --all-pages (default: unlimited)
         #[arg(long)]
         max_pages: Option<usize>,
     },
@@ -75,11 +75,7 @@ async fn main() {
                 .iter()
                 .map(|s| s.parse::<params::Param>())
                 .collect::<Result<Vec<_>, _>>()
-                .unwrap_or_else(|e| {
-                    die(error::CliError::UsageError {
-                        message: e.to_string(),
-                    })
-                });
+                .unwrap_or_else(|e| die(e));
             commands::search::run(
                 parsed_params,
                 &api_key,
@@ -98,11 +94,7 @@ async fn main() {
                 .iter()
                 .map(|s| s.parse::<params::Param>())
                 .collect::<Result<Vec<_>, _>>()
-                .unwrap_or_else(|e| {
-                    die(error::CliError::UsageError {
-                        message: e.to_string(),
-                    })
-                });
+                .unwrap_or_else(|e| die(e));
             commands::locations::run(parsed_params).await
         }
         Command::Archive { id } => {
@@ -125,8 +117,10 @@ async fn main() {
                         message: e.to_string(),
                     })
                 });
+                let stdout = std::io::stdout();
+                let mut out = stdout.lock();
                 for v in &results {
-                    if let Err(e) = output::print_jq_value(v, &mut std::io::stdout()) {
+                    if let Err(e) = output::print_jq_value(v, &mut out) {
                         die(error::CliError::ApiError {
                             message: format!("Output error: {e}"),
                         });
