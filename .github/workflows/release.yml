@@ -42,7 +42,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
@@ -67,6 +67,8 @@ jobs:
 
       - name: Build
         shell: bash
+        env:
+          OPENSSL_STATIC: ${{ matrix.use_cross == 'true' && '1' || '' }}
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
@@ -101,6 +103,7 @@ jobs:
           echo "sha256=${ARCHIVE}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload to release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
