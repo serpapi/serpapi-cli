@@ -62,9 +62,7 @@ jobs:
 
       - name: Install Strawberry Perl (Windows)
         if: matrix.install_perl
-        uses: shogo82148/actions-setup-perl@v1
-        with:
-          perl-version: "5.38"
+        run: choco install strawberryperl
 
       - name: Install cross
         if: matrix.use_cross
