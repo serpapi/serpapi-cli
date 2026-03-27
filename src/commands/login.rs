@@ -34,7 +34,7 @@ pub async fn run() -> Result<(), CliError> {
         });
     }
 
-    let client = make_client(api_key)?;
+    let client = make_client(Some(api_key))?;
     let result = client.account(HashMap::new()).await.map_err(network_err)?;
 
     let result = check_api_error(result)?;

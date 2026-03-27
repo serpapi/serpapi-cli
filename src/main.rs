@@ -70,7 +70,7 @@ async fn main() {
             all_pages,
             max_pages,
         } => {
-            let api_key = resolve_api_key().unwrap_or_else(|e| die(e));
+            let api_key = config::resolve_api_key(cli.api_key.as_deref()).ok();
             let parsed_params = params
                 .iter()
                 .map(|s| s.parse::<params::Param>())
@@ -78,7 +78,7 @@ async fn main() {
                 .unwrap_or_else(|e| die(e));
             commands::search::run(
                 parsed_params,
-                &api_key,
+                api_key.as_deref(),
                 cli.fields.as_deref(),
                 all_pages,
                 max_pages,

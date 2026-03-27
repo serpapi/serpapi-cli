@@ -9,7 +9,7 @@ use url::Url;
 /// Execute a SerpApi search, optionally accumulating all pages into a single result.
 pub async fn run(
     params: Vec<Param>,
-    api_key: &str,
+    api_key: Option<&str>,
     fields: Option<&str>,
     all_pages: bool,
     max_pages: Option<usize>,
@@ -29,7 +29,9 @@ pub async fn run(
     }
 
     // Ensure api_key is in the initial params map so it survives page transitions.
-    params_map.insert(API_KEY_PARAM.to_string(), api_key.to_string());
+    if let Some(key) = api_key {
+        params_map.insert(API_KEY_PARAM.to_string(), key.to_string());
+    }
 
     let client = make_client(api_key)?;
     let mut current_params = params_map;
@@ -88,7 +90,9 @@ pub async fn run(
                     break;
                 }
                 let mut next_params = parse_next_params(&url)?;
-                next_params.insert(API_KEY_PARAM.to_string(), api_key.to_string());
+                if let Some(key) = api_key {
+                    next_params.insert(API_KEY_PARAM.to_string(), key.to_string());
+                }
                 let canonical = canonical_params_key(&next_params);
                 if !seen.insert(canonical) {
                     break;

@@ -20,9 +20,12 @@ pub(crate) fn network_err(e: Box<dyn std::error::Error>) -> CliError {
     }
 }
 
-/// Build a `serpapi::Client` authenticated with the given API key.
-pub fn make_client(api_key: &str) -> Result<Client, CliError> {
-    let params = HashMap::from([(API_KEY_PARAM.to_string(), api_key.to_string())]);
+/// Build a `serpapi::Client`, optionally authenticated with an API key.
+pub fn make_client(api_key: Option<&str>) -> Result<Client, CliError> {
+    let mut params = HashMap::new();
+    if let Some(key) = api_key {
+        params.insert(API_KEY_PARAM.to_string(), key.to_string());
+    }
     Client::new(params).map_err(|e: Box<dyn std::error::Error>| CliError::NetworkError {
         message: e.to_string(),
     })
