@@ -3,137 +3,24 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
-
-permissions:
-  contents: write
+      - "v*"
 
 jobs:
-  create-release:
-    name: Create release
+  goreleaser:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Verify tag matches Cargo.toml version
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          if [ "$TAG" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION"
-            exit 1
-          fi
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --draft \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
-
-  build-release:
-    name: Build (${{ matrix.target }})
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: true
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          target: ${{ matrix.target }}
-
-      - name: Prepend Strawberry Perl to PATH (Windows)
-        if: runner.os == 'Windows'
-        run: echo "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install cross
-        if: matrix.use_cross
-        uses: taiki-e/install-action@v2
+          fetch-depth: 0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          tool: cross
-
-      - name: Build
-        if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        shell: bash
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Package and checksum
-        id: package
-        shell: bash
-        run: |
-          BIN="serpapi"
-          TARGET="${{ matrix.target }}"
-          VERSION="${GITHUB_REF_NAME#v}"
-          PKG="${BIN}-${VERSION}-${TARGET}"
-
-          mkdir "$PKG"
-          cp README.md LICENSE "$PKG/"
-
-          if [[ "$TARGET" == *"windows"* ]]; then
-            cp "target/${TARGET}/release/${BIN}.exe" "$PKG/"
-            7z a "${PKG}.zip" "$PKG"
-            ARCHIVE="${PKG}.zip"
-          else
-            cp "target/${TARGET}/release/${BIN}" "$PKG/"
-            tar czf "${PKG}.tar.gz" "$PKG"
-            ARCHIVE="${PKG}.tar.gz"
-          fi
-
-          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
-          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
-          echo "sha256=${ARCHIVE}.sha256" >> "$GITHUB_OUTPUT"
-
-      - name: Upload to release
-        shell: bash
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@9ed2f89a662bf1735a48bc8557fd212fa902bebf # v6.2.1
+        with:
+          version: ~> v2
+          args: release --clean
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$GITHUB_REF_NAME" \
-            "${{ steps.package.outputs.archive }}" \
-            "${{ steps.package.outputs.sha256 }}"
-
-  publish-release:
-    name: Publish release
-    needs: build-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
-
-  publish-crates:
-    name: Publish to crates.io
-    needs: publish-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
-      - name: Publish
-        run: cargo publish --locked
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

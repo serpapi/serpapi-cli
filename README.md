@@ -1,6 +1,6 @@
 # serpapi-cli
 
-> SerpApi CLI for humans and AI agents
+> HTTP client for structured web search data via SerpApi
 
 ## Installation
 
@@ -11,32 +11,14 @@ brew tap serpapi/homebrew-tap
 brew install serpapi
 ```
 
-### cargo-binstall (pre-built binary, no compilation)
-
-```bash
-cargo binstall serpapi-cli
-```
-
-### Shell script (Linux/macOS)
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/serpapi/serpapi-cli/releases/latest/download/serpapi-installer.sh | sh
-```
-
-### PowerShell (Windows)
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/serpapi/serpapi-cli/releases/latest/download/serpapi-installer.ps1 | iex"
-```
-
 ### Pre-built Binaries
 
 Download directly from [GitHub Releases](https://github.com/serpapi/serpapi-cli/releases)
 
-### Cargo (compile from source)
+### Go (compile from source)
 
 ```bash
-cargo install serpapi-cli
+go install github.com/serpapi/serpapi-cli/cmd/serpapi@latest
 ```
 
 ## Quick Start
@@ -45,37 +27,47 @@ cargo install serpapi-cli
 # Authenticate
 serpapi login
 
-# Perform a search (note: --json comes BEFORE the command)
-serpapi --json search engine=google q=coffee
+# Perform a search
+serpapi search engine=google q=coffee
 ```
 
 ## Commands
 
 ### search
 
-Perform a search with any supported SerpApi engine.
+Perform a search with any supported SerpApi engine. Parameters are passed as bare `key=value` pairs.
 
 ```bash
 # Basic search
-serpapi --json search engine=google q=coffee
-
-# Fetch all pages and merge array results
-serpapi --json search engine=google q=coffee --all-pages
-
-# Limit to first 3 pages
-serpapi --json search engine=google q=coffee --all-pages --max-pages 3
-
-# With server-side field filtering (reduces response size at API level)
-serpapi --json --fields "organic_results[].{title,link}" search engine=google q=coffee
-
-# With client-side jq filtering (like gh --jq)
-serpapi --json --jq ".organic_results[0:3] | [.[] | {title, link}]" search engine=google q=coffee
-
-# Both: server-side reduces payload, then client-side refines
-serpapi --json --fields "organic_results" --jq ".organic_results[0:3] | [.[] | {title, link}]" search engine=google q=coffee
+serpapi search engine=google q=coffee
 
 # Multiple parameters
-serpapi --json search engine=google q="coffee shops" location="Austin,TX"
+serpapi search engine=google q="coffee shops" location="Austin,TX"
+
+# Use a different engine
+serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
+
+# With server-side field filtering (reduces response size at API level)
+serpapi search --fields "organic_results[].{title,link}" engine=google q=coffee
+
+# With client-side jq filtering (like gh --jq)
+serpapi search --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=google q=coffee
+
+# Both: server-side reduces payload, then client-side refines
+serpapi search --fields "organic_results" --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=google q=coffee
+```
+
+#### Pagination Flags
+
+- `--all-pages` — Fetch all result pages and merge array fields across pages
+- `--max-pages <n>` — Maximum number of pages to fetch when using `--all-pages`
+
+```bash
+# Fetch all pages and merge array results
+serpapi search engine=google q=coffee --all-pages
+
+# Limit to first 3 pages
+serpapi search engine=google q=coffee --all-pages --max-pages 3
 ```
 
 ### account
@@ -83,7 +75,7 @@ serpapi --json search engine=google q="coffee shops" location="Austin,TX"
 Retrieve account information and usage statistics.
 
 ```bash
-serpapi --json account
+serpapi account
 ```
 
 ### locations
@@ -92,7 +84,7 @@ Lookup available locations for search queries (no API key required).
 
 ```bash
 # Find locations matching "austin"
-serpapi --json locations q=austin num=5
+serpapi locations q=austin num=5
 ```
 
 ### archive
@@ -100,7 +92,7 @@ serpapi --json locations q=austin num=5
 Retrieve a previously cached search by ID.
 
 ```bash
-serpapi --json archive <search-id>
+serpapi archive <search-id>
 ```
 
 ### login
@@ -113,26 +105,9 @@ serpapi login
 
 ## Global Flags
 
-- `--json` — Clean JSON output (no ANSI colors, for AI agents and pipelines)
 - `--fields <expr>` — Server-side field filtering (maps to SerpApi's `json_restrictor` parameter). Note: The `--fields` filter uses SerpApi's server-side field restrictor syntax—see [SerpApi docs](https://serpapi.com) for supported expressions.
 - `--jq <expr>` — Client-side jq filter applied to JSON output (same as `gh --jq`)
 - `--api-key <key>` — Override API key (takes priority over environment and config file)
-- `--all-pages` — Fetch all result pages and merge array fields across pages
-- `--max-pages <n>` — Maximum number of pages to fetch when using `--all-pages`
-
-**⚠️ Important: Flag Position**
-
-Global flags must come **BEFORE** the subcommand, not after:
-
-```bash
-# ✅ Correct
-serpapi --json account
-serpapi --json --jq ".organic_results[0:3]" search engine=google q=coffee
-
-# ❌ Incorrect (will fail with "unexpected argument")
-serpapi account --json
-serpapi search engine=google q=coffee --json
-```
 
 ## Configuration
 
@@ -159,7 +134,6 @@ api_key = "your_serpapi_key_here"
 
 This CLI is optimized for consumption by AI agents (Claude, Codex, etc.):
 
-- **Use `--json` flag** for clean, parseable JSON output (no ANSI colors or formatting)
 - **Use `--fields` for server-side filtering** to reduce token usage:
   - Example: `--fields "organic_results[0:3]"` returns only first 3 results
   - Filtering happens at the API level, saving bandwidth and context window tokens
@@ -182,4 +156,4 @@ This CLI is optimized for consumption by AI agents (Claude, Codex, etc.):
 - [SerpApi Website](https://serpapi.com/)
 - [API Documentation](https://serpapi.com/search-api)
 - [MCP Server](https://github.com/serpapi/serpapi-mcp)
-- [serpapi-rust Crate](https://github.com/serpapi/serpapi-rust)
+- [serpapi-go Library](https://github.com/serpapi/serpapi-golang)
