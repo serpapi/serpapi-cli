@@ -1,1 +1,8 @@
-/target
+# Go binary
+/serpapi
+/serpapi-test-bin
+
+# IDE
+.idea/
+.vscode/
+tmp/
