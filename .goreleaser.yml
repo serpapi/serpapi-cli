@@ -44,21 +44,5 @@ changelog:
       - "^docs:"
       - "^test:"
 
-brews:
-  - name: serpapi-cli
-    repository:
-      owner: serpapi
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
-    homepage: https://serpapi.com
-    description: "HTTP client for structured web search data via SerpApi"
-    license: MIT
-    install: |
-      bin.install "serpapi"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/serpapi --version")
-      assert_match "search", shell_output("#{bin}/serpapi --help")
-      assert_match "No API key", shell_output("#{bin}/serpapi account 2>&1", 2)
-      assert_match "No API key", shell_output("#{bin}/serpapi archive abc123 2>&1", 2)
-      assert_match "Invalid archive ID", shell_output("#{bin}/serpapi --api-key x archive ../bad 2>&1", 2)
+announce:
+  skip: true
