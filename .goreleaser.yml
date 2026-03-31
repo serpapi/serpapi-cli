@@ -50,7 +50,7 @@ brews:
       owner: serpapi
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    folder: Formula
+    directory: Formula
     homepage: https://serpapi.com
     description: "HTTP client for structured web search data via SerpApi"
     license: MIT
