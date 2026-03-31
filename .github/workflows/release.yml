@@ -23,4 +23,83 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  homebrew:
+    runs-on: ubuntu-latest
+    needs: goreleaser
+    steps:
+      - name: Set up SSH deploy key
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581d1d7c # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+
+      - name: Update Homebrew formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          BASE_URL="https://github.com/serpapi/serpapi-cli/releases/download/${TAG}"
+
+          # Fetch checksums
+          CHECKSUMS=$(curl -fsSL "${BASE_URL}/serpapi_${VERSION}_checksums.txt")
+
+          get_sha() {
+            echo "$CHECKSUMS" | grep "$1" | awk '{print $1}'
+          }
+
+          SHA_DARWIN_AMD64=$(get_sha "serpapi_${VERSION}_darwin_amd64.tar.gz")
+          SHA_DARWIN_ARM64=$(get_sha "serpapi_${VERSION}_darwin_arm64.tar.gz")
+          SHA_LINUX_AMD64=$(get_sha "serpapi_${VERSION}_linux_amd64.tar.gz")
+          SHA_LINUX_ARM64=$(get_sha "serpapi_${VERSION}_linux_arm64.tar.gz")
+
+          cat > /tmp/serpapi-cli.rb <<FORMULA
+          class SerpapiCli < Formula
+            desc "HTTP client for structured web search data via SerpApi"
+            homepage "https://serpapi.com"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/serpapi_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "${BASE_URL}/serpapi_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${SHA_DARWIN_AMD64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/serpapi_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "${BASE_URL}/serpapi_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+            end
+
+            def install
+              bin.install "serpapi"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/serpapi --version")
+              assert_match "search", shell_output("#{bin}/serpapi --help")
+              assert_match "No API key", shell_output("#{bin}/serpapi account 2>&1", 2)
+              assert_match "No API key", shell_output("#{bin}/serpapi archive abc123 2>&1", 2)
+              assert_match "Invalid archive ID", shell_output("#{bin}/serpapi --api-key x archive ../bad 2>&1", 2)
+            end
+          end
+          FORMULA
+
+          # Clone, update formula, push
+          git clone git@github.com:serpapi/homebrew-tap.git
+          cp /tmp/serpapi-cli.rb homebrew-tap/Formula/serpapi-cli.rb
+          cd homebrew-tap
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add Formula/serpapi-cli.rb
+          git commit -m "serpapi-cli ${VERSION}"
+          git push
+
