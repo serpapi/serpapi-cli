@@ -1,0 +1,64 @@
+version: 2
+
+project_name: serpapi
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: serpapi
+    main: ./cmd/serpapi
+    binary: serpapi
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/serpapi/serpapi-cli/pkg/version.Version={{.Version}}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    name_template: "serpapi_{{.Version}}_{{.Os}}_{{.Arch}}"
+    files:
+      - none*
+
+checksum:
+  name_template: "serpapi_{{.Version}}_checksums.txt"
+
+snapshot:
+  version_template: "{{.Version}}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+brews:
+  - name: serpapi-cli
+    repository:
+      owner: serpapi
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    folder: Formula
+    homepage: https://serpapi.com
+    description: "HTTP client for structured web search data via SerpApi"
+    license: MIT
+    install: |
+      bin.install "serpapi"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/serpapi --version")
+      assert_match "search", shell_output("#{bin}/serpapi --help")
+      assert_match "No API key", shell_output("#{bin}/serpapi account 2>&1", 2)
+      assert_match "No API key", shell_output("#{bin}/serpapi archive abc123 2>&1", 2)
+      assert_match "Invalid archive ID", shell_output("#{bin}/serpapi --api-key x archive ../bad 2>&1", 2)
