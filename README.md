@@ -8,7 +8,7 @@
 
 ```bash
 brew tap serpapi/homebrew-tap
-brew install serpapi
+brew install serpapi-cli
 ```
 
 ### Pre-built Binaries
