@@ -106,7 +106,18 @@ serpapi login
 ## Global Flags
 
 - `--fields <expr>` — Server-side field filtering (maps to SerpApi's `json_restrictor` parameter). Note: The `--fields` filter uses SerpApi's server-side field restrictor syntax—see [SerpApi docs](https://serpapi.com) for supported expressions.
-- `--jq <expr>` — Client-side jq filter applied to JSON output (same as `gh --jq`)
+- `--jq <expr>` — Client-side [jq](https://jqlang.github.io/jq/) filter applied to the JSON response, same as `gh --jq` (see the [jq tutorial](https://jqlang.github.io/jq/tutorial/) for syntax). Runs locally after the API call; the jq engine is embedded so no external `jq` install is required. Use `--fields` to shrink the payload server-side, then `--jq` to reshape it client-side. Examples:
+  ```bash
+  # Pick the first 3 organic results, keeping only title and link
+  serpapi search --jq '.organic_results[0:3] | [.[] | {title, link}]' engine=google q=coffee
+
+  # Print just the link of each organic result
+  serpapi search --jq '.organic_results[].link' engine=google q=coffee
+
+  # Count organic results
+  serpapi search --jq '.organic_results | length' engine=google q=coffee
+  ```
+  Quote the expression with single quotes in bash/zsh to avoid shell interpretation of `$`, `|`, and `"`.
 - `--api-key <key>` — Override API key (takes priority over environment and config file)
 
 ## Configuration
