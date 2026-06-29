@@ -25,6 +25,9 @@ var (
 var rootCmd = &cobra.Command{
 	Use:           "serpapi",
 	Short:         "HTTP client for structured web search data via SerpApi",
+	Example:       `  serpapi search engine=google q=coffee
+  serpapi search engine=google_light q="best pizza NYC" --jq ".organic_results[:3]"
+  serpapi account`,
 	Version:       version.Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,

@@ -25,8 +25,13 @@ const defaultMaxPages = 100
 var searchCmd = &cobra.Command{
 	Use:   "search [PARAMS...]",
 	Short: "Perform a search with any supported SerpApi engine",
-	Args:  cobra.ArbitraryArgs,
-	RunE:  runSearch,
+	Example: `  serpapi search engine=google q=coffee
+  serpapi search engine=google_light q="weather in Tokyo"
+  serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
+  serpapi search engine=google q=coffee --jq ".organic_results[:3]"
+  serpapi search engine=google q=coffee --all-pages --max-pages 3`,
+	Args: cobra.ArbitraryArgs,
+	RunE: runSearch,
 }
 
 func init() {
