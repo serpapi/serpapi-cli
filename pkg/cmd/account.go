@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"regexp"
 
 	"github.com/spf13/cobra"
 
@@ -37,23 +38,18 @@ func runAccount(cmd *cobra.Command, args []string) error {
 	return handleOutput(maskAPIKey(result))
 }
 
-// maskAPIKey replaces the api_key value with a masked version showing only the last 4 chars.
+var reAPIKey = regexp.MustCompile(`("api_key"\s*:\s*")([^"]{9,})(")`)
+
+// maskAPIKey replaces the api_key value in raw JSON with a masked version (first 4 + last 4).
+// Operates on raw bytes to preserve original field order.
 func maskAPIKey(raw json.RawMessage) json.RawMessage {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return raw
-	}
-	if keyVal, ok := m["api_key"]; ok {
-		var key string
-		if err := json.Unmarshal(keyVal, &key); err == nil && len(key) > 8 {
-			masked := key[:4] + "…" + key[len(key)-4:]
-			b, _ := json.Marshal(masked)
-			m["api_key"] = b
+	return reAPIKey.ReplaceAllFunc(raw, func(match []byte) []byte {
+		sub := reAPIKey.FindSubmatch(match)
+		if len(sub) < 4 {
+			return match
 		}
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return raw
-	}
-	return out
+		key := string(sub[2])
+		masked := key[:4] + "…" + key[len(key)-4:]
+		return append(append(sub[1], []byte(masked)...), sub[3]...)
+	})
 }

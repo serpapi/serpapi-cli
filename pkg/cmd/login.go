@@ -47,8 +47,8 @@ func runLogin(cmd *cobra.Command, args []string) error {
 						return nil
 					}
 				} else {
-					// Non-interactive: don't overwrite silently
-					return nil
+					// Non-interactive: exit non-zero so CI detects the no-op
+					return &clierrors.UsageError{Message: fmt.Sprintf("Already logged in as %s. Delete %s to re-authenticate.", account.AccountEmail, config.Path())}
 				}
 			}
 		}

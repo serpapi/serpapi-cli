@@ -40,7 +40,7 @@ jobs:
           CHECKSUMS=$(curl -fsSL "${BASE_URL}/serpapi_${VERSION}_checksums.txt")
 
           get_sha() {
-            echo "$CHECKSUMS" | grep "$1" | awk '{print $1}'
+            echo "$CHECKSUMS" | grep -F "$1" | awk '{print $1}'
           }
 
           SHA_DARWIN_AMD64=$(get_sha "serpapi_${VERSION}_darwin_amd64.tar.gz")
