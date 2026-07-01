@@ -50,6 +50,10 @@ func maskAPIKey(raw json.RawMessage) json.RawMessage {
 		}
 		key := string(sub[2])
 		masked := key[:4] + "…" + key[len(key)-4:]
-		return append(append(sub[1], []byte(masked)...), sub[3]...)
+		var buf []byte
+		buf = append(buf, sub[1]...)
+		buf = append(buf, masked...)
+		buf = append(buf, sub[3]...)
+		return buf
 	})
 }
