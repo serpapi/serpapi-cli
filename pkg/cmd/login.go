@@ -28,6 +28,33 @@ func init() {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
+	// Check if already authenticated
+	if existingKey, ok := config.LoadAPIKey(); ok {
+		client := api.New(existingKey)
+		raw, err := client.Account(cmd.Context())
+		if err == nil {
+			var account struct {
+				AccountEmail  string `json:"account_email"`
+				AccountStatus string `json:"account_status"`
+			}
+			if json.Unmarshal(raw, &account) == nil && account.AccountEmail != "" {
+				fmt.Fprintf(os.Stderr, "Already logged in as %s (%s).\n", account.AccountEmail, account.AccountStatus)
+				if term.IsTerminal(int(os.Stdin.Fd())) {
+					fmt.Fprint(os.Stderr, "Re-authenticate with a different key? [y/N] ")
+					reader := bufio.NewReader(os.Stdin)
+					line, _ := reader.ReadString('\n')
+					if strings.TrimSpace(strings.ToLower(line)) != "y" {
+						return nil
+					}
+				} else {
+					// Non-interactive: exit non-zero so CI detects the no-op
+					return fmt.Errorf("already logged in as %s. Delete %s to re-authenticate", account.AccountEmail, config.Path())
+				}
+			}
+		}
+		// If API call failed (e.g. expired key), fall through to re-login
+	}
+
 	var apiKey string
 
 	if term.IsTerminal(int(os.Stdin.Fd())) {

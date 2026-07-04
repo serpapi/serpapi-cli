@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
+	"regexp"
+
 	"github.com/spf13/cobra"
 
 	"github.com/serpapi/serpapi-cli/pkg/api"
@@ -32,5 +35,25 @@ func runAccount(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return handleOutput(result)
+	return handleOutput(maskAPIKey(result))
+}
+
+var reAPIKey = regexp.MustCompile(`("api_key"\s*:\s*")([^"]{9,})(")`)
+
+// maskAPIKey replaces the api_key value in raw JSON with a masked version (first 4 + last 4).
+// Operates on raw bytes to preserve original field order.
+func maskAPIKey(raw json.RawMessage) json.RawMessage {
+	return reAPIKey.ReplaceAllFunc(raw, func(match []byte) []byte {
+		sub := reAPIKey.FindSubmatch(match)
+		if len(sub) < 4 {
+			return match
+		}
+		key := string(sub[2])
+		masked := key[:4] + "…" + key[len(key)-4:]
+		var buf []byte
+		buf = append(buf, sub[1]...)
+		buf = append(buf, masked...)
+		buf = append(buf, sub[3]...)
+		return buf
+	})
 }
