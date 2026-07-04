@@ -40,7 +40,13 @@ jobs:
           CHECKSUMS=$(curl -fsSL "${BASE_URL}/serpapi_${VERSION}_checksums.txt")
 
           get_sha() {
-            echo "$CHECKSUMS" | grep -F "$1" | awk '{print $1}'
+            local sha
+            sha=$(echo "$CHECKSUMS" | grep -F "$1" | awk '{print $1}')
+            if [ -z "$sha" ]; then
+              echo "ERROR: checksum not found for $1" >&2
+              exit 1
+            fi
+            echo "$sha"
           }
 
           SHA_DARWIN_AMD64=$(get_sha "serpapi_${VERSION}_darwin_amd64.tar.gz")
