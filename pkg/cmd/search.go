@@ -20,7 +20,10 @@ var (
 	maxPagesFlag int
 )
 
-const defaultMaxPages = 100
+const (
+	defaultMaxPages          = 100
+	paginationRestrictorPath = "serpapi_pagination.next"
+)
 
 var searchCmd = &cobra.Command{
 	Use:   "search [PARAMS...]",
@@ -74,6 +77,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		maxPages = maxPagesFlag
 	}
 
+	paginationRestrictor := withPaginationRestrictor(paramsMap["json_restrictor"])
+	if paginationRestrictor != "" {
+		paramsMap["json_restrictor"] = paginationRestrictor
+	}
+
 	client := api.New(apiKey)
 	currentParams := paramsMap
 	var accumulated map[string]any
@@ -114,7 +122,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 			break
 		}
 
-		nextParams, err := parseNextParams(nextURL)
+		nextParams, err := parseNextParams(nextURL, paginationRestrictor)
 		if err != nil {
 			return err
 		}
@@ -140,6 +148,15 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return &clierrors.APIError{Message: "Failed to encode result: " + err.Error()}
 	}
 	return handleOutput(json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+}
+
+// withPaginationRestrictor adds the pagination field needed internally while
+// preserving the caller's server-side field projection.
+func withPaginationRestrictor(restrictor string) string {
+	if restrictor == "" {
+		return ""
+	}
+	return restrictor + "," + paginationRestrictorPath
 }
 
 // extractNextURL pulls the next pagination URL from a search result.
@@ -175,8 +192,9 @@ func mergeArrayFields(dst, src map[string]any) {
 	}
 }
 
-// parseNextParams extracts query parameters from a full URL.
-func parseNextParams(nextURL string) (map[string]string, error) {
+// parseNextParams extracts query parameters from a full URL and reapplies the
+// internal restrictor because pagination URLs may omit response-shaping params.
+func parseNextParams(nextURL, jsonRestrictor string) (map[string]string, error) {
 	parsed, err := url.Parse(nextURL)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid pagination URL: " + err.Error()}
@@ -186,6 +204,9 @@ func parseNextParams(nextURL string) (map[string]string, error) {
 		if len(v) > 0 {
 			result[k] = v[0]
 		}
+	}
+	if jsonRestrictor != "" {
+		result["json_restrictor"] = jsonRestrictor
 	}
 	return result, nil
 }
