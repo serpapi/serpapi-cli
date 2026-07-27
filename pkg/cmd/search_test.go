@@ -20,8 +20,24 @@ func TestCanonicalParamsKeyIsOrderIndependent(t *testing.T) {
 	}
 }
 
+func TestWithPaginationRestrictor(t *testing.T) {
+	if got := withPaginationRestrictor(""); got != "" {
+		t.Errorf("expected empty restrictor, got %q", got)
+	}
+
+	const fields = "organic_results[].{title,link}"
+	want := fields + ",serpapi_pagination.next"
+	if got := withPaginationRestrictor(fields); got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
 func TestParseNextParams(t *testing.T) {
-	params, err := parseNextParams("https://serpapi.com/search.json?q=coffee&start=10&engine=google")
+	const restrictor = "organic_results[].{title,link},serpapi_pagination.next"
+	params, err := parseNextParams(
+		"https://serpapi.com/search.json?q=coffee&start=10&engine=google",
+		restrictor,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,5 +49,8 @@ func TestParseNextParams(t *testing.T) {
 	}
 	if params["engine"] != "google" {
 		t.Errorf("expected engine=google, got %s", params["engine"])
+	}
+	if params["json_restrictor"] != restrictor {
+		t.Errorf("expected json_restrictor=%q, got %q", restrictor, params["json_restrictor"])
 	}
 }
