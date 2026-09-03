@@ -44,7 +44,9 @@ func (c *Client) userAgent() string {
 	return "serpapi-go-cli/" + version.Version
 }
 
-func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+// getRaw performs a GET request and returns the response body without
+// validating its content type. HTTP-level errors are still reported.
+func (c *Client) getRaw(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -95,6 +97,15 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 		}
 	}
 
+	return body, nil
+}
+
+func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	body, err := c.getRaw(ctx, endpoint, params)
+	if err != nil {
+		return nil, err
+	}
+
 	// Validate response is JSON (guard against HTML error pages with 200 status).
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
@@ -133,6 +144,21 @@ func (c *Client) Search(ctx context.Context, params map[string]string) (json.Raw
 		return nil, err
 	}
 	return json.RawMessage(body), nil
+}
+
+// SearchRaw performs a search request and returns the raw response body
+// without JSON validation. Used for non-JSON output formats such as
+// output=md or output=html.
+func (c *Client) SearchRaw(ctx context.Context, params map[string]string) ([]byte, error) {
+	p := make(map[string]string, len(params)+1)
+	for k, v := range params {
+		p[k] = v
+	}
+	if c.apiKey != "" {
+		p["api_key"] = c.apiKey
+	}
+
+	return c.getRaw(ctx, "/search.json", p)
 }
 
 // Account retrieves account information.

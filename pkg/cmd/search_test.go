@@ -35,3 +35,24 @@ func TestParseNextParams(t *testing.T) {
 		t.Errorf("expected engine=google, got %s", params["engine"])
 	}
 }
+
+func TestIsRawOutput(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]string
+		want   bool
+	}{
+		{"no output param", map[string]string{"q": "coffee"}, false},
+		{"output json", map[string]string{"output": "json"}, false},
+		{"output JSON uppercase", map[string]string{"output": "JSON"}, false},
+		{"output empty", map[string]string{"output": ""}, false},
+		{"output md", map[string]string{"output": "md"}, true},
+		{"output html", map[string]string{"output": "html"}, true},
+		{"output md with whitespace", map[string]string{"output": " md "}, true},
+	}
+	for _, tc := range cases {
+		if got := isRawOutput(tc.params); got != tc.want {
+			t.Errorf("%s: isRawOutput = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
