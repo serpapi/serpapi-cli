@@ -63,3 +63,33 @@ func TestPrintJQValueObject(t *testing.T) {
 		t.Errorf("expected JSON object, got %q", output)
 	}
 }
+
+func TestPrintRawAddsTrailingNewline(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintRaw([]byte("# Results\n\n- coffee"), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "# Results\n\n- coffee\n" {
+		t.Errorf("expected trailing newline added, got %q", got)
+	}
+}
+
+func TestPrintRawPreservesTrailingNewline(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintRaw([]byte("# Results\n"), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "# Results\n" {
+		t.Errorf("expected content unchanged, got %q", got)
+	}
+}
+
+func TestPrintRawEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintRaw(nil, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output, got %q", buf.String())
+	}
+}

@@ -41,6 +41,19 @@ func PrintJSON(data []byte) error {
 	return err
 }
 
+// PrintRaw writes raw response bytes to w verbatim,
+// ensuring the output ends with a newline.
+func PrintRaw(data []byte, w io.Writer) error {
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		_, err := fmt.Fprintln(w)
+		return err
+	}
+	return nil
+}
+
 // PrintJQValue prints a single jq result value with raw scalar output.
 // Strings are unquoted. Numbers and bools are printed as-is.
 // Null produces an empty line. Objects and arrays are JSON-encoded.

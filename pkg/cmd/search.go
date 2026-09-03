@@ -7,11 +7,13 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/serpapi/serpapi-cli/pkg/api"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
+	"github.com/serpapi/serpapi-cli/pkg/output"
 	"github.com/serpapi/serpapi-cli/pkg/params"
 )
 
@@ -28,6 +30,7 @@ var searchCmd = &cobra.Command{
 	Example: `  serpapi search engine=google q=coffee
   serpapi search engine=google_light q="weather in Tokyo"
   serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
+  serpapi search engine=google q=coffee output=md
   serpapi search engine=google q=coffee --jq ".organic_results[:3]"
   serpapi search engine=google q=coffee --all-pages --max-pages 3`,
 	Args: cobra.ArbitraryArgs,
@@ -54,6 +57,34 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	if hasMaxPages && !allPagesFlag {
 		fmt.Fprintln(os.Stderr, "Warning: --max-pages has no effect without --all-pages")
+	}
+
+	// Non-JSON output formats (e.g. output=md, output=html) are passed through verbatim.
+	if isRawOutput(paramsMap) {
+		format := paramsMap["output"]
+		if jqFlag != "" {
+			return &clierrors.UsageError{Message: "--jq requires JSON output and cannot be used with output=" + format}
+		}
+		if allPagesFlag {
+			return &clierrors.UsageError{Message: "--all-pages requires JSON output and cannot be used with output=" + format}
+		}
+		if fieldsFlag != "" {
+			fmt.Fprintln(os.Stderr, "Warning: --fields has no effect with output="+format)
+		}
+
+		sp := newSpinner("Searching...")
+		sp.Start()
+		defer sp.Stop()
+		client := api.New(apiKey)
+		raw, err := client.SearchRaw(cmd.Context(), paramsMap)
+		if err != nil {
+			return err
+		}
+		sp.Stop()
+		if err := output.PrintRaw(raw, os.Stdout); err != nil {
+			return &clierrors.APIError{Message: fmt.Sprintf("Output error: %s", err)}
+		}
+		return nil
 	}
 
 	if !allPagesFlag {
@@ -140,6 +171,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return &clierrors.APIError{Message: "Failed to encode result: " + err.Error()}
 	}
 	return handleOutput(json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+}
+
+// isRawOutput reports whether the output parameter requests a non-JSON
+// format (e.g. md, html) that should be printed verbatim.
+func isRawOutput(p map[string]string) bool {
+	format := strings.ToLower(strings.TrimSpace(p["output"]))
+	return format != "" && format != "json"
 }
 
 // extractNextURL pulls the next pagination URL from a search result.

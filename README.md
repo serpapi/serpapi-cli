@@ -47,6 +47,9 @@ serpapi search engine=google q="coffee shops" location="Austin,TX"
 # Use a different engine
 serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
 
+# Markdown output (also supports output=html); printed as-is, incompatible with --jq and --all-pages
+serpapi search engine=google q=coffee output=md
+
 # With server-side field filtering (reduces response size at API level)
 serpapi search --fields "organic_results[].{title,link}" engine=google q=coffee
 
