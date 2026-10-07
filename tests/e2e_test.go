@@ -161,6 +161,62 @@ func TestSearchAllPages(t *testing.T) {
 	}
 }
 
+func TestSearchAllPagesWithFields(t *testing.T) {
+	key := requireKey(t)
+	cmd := exec.Command(
+		binaryPath,
+		"--api-key", key,
+		"search",
+		"--fields", "organic_results[].{title,link},search_parameters.start",
+		"engine=google",
+		"q=coffee",
+		"--all-pages",
+		"--max-pages", "2",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("search all pages with fields failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("failed to parse search output: %v", err)
+	}
+	for field := range result {
+		if field != "organic_results" && field != "search_parameters" {
+			t.Errorf("unexpected top-level field %q", field)
+		}
+	}
+
+	searchParameters, ok := result["search_parameters"].(map[string]any)
+	if !ok {
+		t.Fatal("expected search_parameters object from the final page")
+	}
+	start, ok := searchParameters["start"].(float64)
+	if !ok || start <= 0 {
+		t.Fatalf("expected a positive final-page start offset, got %v", searchParameters["start"])
+	}
+
+	organicResults, ok := result["organic_results"].([]any)
+	if !ok {
+		t.Fatal("expected organic_results array")
+	}
+	if len(organicResults) < 2 {
+		t.Fatalf("expected results from multiple pages, got %d", len(organicResults))
+	}
+	for i, item := range organicResults {
+		resultItem, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("organic result %d is not an object", i)
+		}
+		for field := range resultItem {
+			if field != "title" && field != "link" {
+				t.Errorf("organic result %d contains unexpected field %q", i, field)
+			}
+		}
+	}
+}
+
 func TestInvalidAPIKey(t *testing.T) {
 	cmd := exec.Command(binaryPath, "--api-key", "invalid", "search", "engine=google", "q=test")
 	err := cmd.Run()
