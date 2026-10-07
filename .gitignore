@@ -6,3 +6,6 @@
 .idea/
 .vscode/
 tmp/
+
+# Local secrets
+.env

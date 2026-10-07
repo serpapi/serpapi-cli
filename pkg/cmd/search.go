@@ -18,6 +18,7 @@ import (
 var (
 	allPagesFlag bool
 	maxPagesFlag int
+	imageFlag    string
 )
 
 const (
@@ -32,7 +33,8 @@ var searchCmd = &cobra.Command{
   serpapi search engine=google_light q="weather in Tokyo"
   serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
   serpapi search engine=google q=coffee --jq ".organic_results[:3]"
-  serpapi search engine=google q=coffee --all-pages --max-pages 3`,
+  serpapi search engine=google q=coffee --all-pages --max-pages 3
+  serpapi search engine=google_lens --image ./photo.jpg`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runSearch,
 }
@@ -40,6 +42,7 @@ var searchCmd = &cobra.Command{
 func init() {
 	searchCmd.Flags().BoolVar(&allPagesFlag, "all-pages", false, "Fetch all pages and merge array results")
 	searchCmd.Flags().IntVar(&maxPagesFlag, "max-pages", 0, "Maximum number of pages to fetch when paginating with --all-pages")
+	searchCmd.Flags().StringVar(&imageFlag, "image", "", "Upload an image file (or - for stdin) and search with its image_id, e.g. for engine=google_lens")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -52,6 +55,21 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	apiKey := resolveAPIKeyOptional()
 	paramsMap := params.ParamsToMap(parsed)
 	params.ApplyFields(paramsMap, fieldsFlag)
+
+	if imageFlag != "" {
+		if _, exists := paramsMap["image_id"]; exists {
+			return &clierrors.UsageError{Message: "Use either --image or image_id=<id>, not both"}
+		}
+		// The upload requires authentication even though search tolerates a missing key.
+		if apiKey, err = resolveAPIKey(); err != nil {
+			return err
+		}
+		imageID, err := uploadImageID(cmd.Context(), api.New(apiKey), imageFlag)
+		if err != nil {
+			return err
+		}
+		paramsMap["image_id"] = imageID
+	}
 
 	hasMaxPages := cmd.Flags().Changed("max-pages")
 

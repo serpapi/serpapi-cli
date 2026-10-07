@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -146,6 +147,114 @@ func TestArchive(t *testing.T) {
 	output := string(out)
 	if !strings.Contains(output, "search_metadata") {
 		t.Error("expected search_metadata in archive result")
+	}
+}
+
+// smallest valid 1x1 transparent PNG
+var png1x1 = []byte{
+	0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+	0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+	0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+	0x42, 0x60, 0x82,
+}
+
+func writeTestPNG(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(path, png1x1, 0o600); err != nil {
+		t.Fatalf("failed to write test image: %v", err)
+	}
+	return path
+}
+
+func TestImageUpload(t *testing.T) {
+	key := requireKey(t)
+	cmd := exec.Command(binaryPath, "--api-key", key, "image", writeTestPNG(t))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("image upload failed: %v\n%s", err, out)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("failed to parse upload output: %v", err)
+	}
+	if result["message"] != "Image uploaded successfully." {
+		t.Errorf("unexpected message: %v", result["message"])
+	}
+	if id, _ := result["image_id"].(string); id == "" {
+		t.Error("expected non-empty image_id")
+	}
+}
+
+func TestImageUploadFromStdin(t *testing.T) {
+	key := requireKey(t)
+	cmd := exec.Command(binaryPath, "--api-key", key, "--jq", ".image_id", "image", "-")
+	cmd.Stdin = bytes.NewReader(png1x1)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("image upload from stdin failed: %v\n%s", err, out)
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		t.Error("expected non-empty image_id")
+	}
+}
+
+func TestImageUploadRejectsInvalidImage(t *testing.T) {
+	key := requireKey(t)
+	path := filepath.Join(t.TempDir(), "invalid.txt")
+	if err := os.WriteFile(path, []byte("invalid image data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "--api-key", key, "image", path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected failure for invalid image")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 1 {
+		t.Errorf("expected exit code 1, got %d", exitErr.ExitCode())
+	}
+	if !strings.Contains(stderr.String(), "Invalid image format") {
+		t.Errorf("expected invalid image format error, got: %s", stderr.String())
+	}
+}
+
+func TestImageUploadMissingFile(t *testing.T) {
+	cmd := exec.Command(binaryPath, "--api-key", "irrelevant", "image", filepath.Join(t.TempDir(), "missing.png"))
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected failure for missing file")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 2 {
+		t.Errorf("expected exit code 2, got %d", exitErr.ExitCode())
+	}
+}
+
+func TestSearchWithImage(t *testing.T) {
+	key := requireKey(t)
+	cmd := exec.Command(binaryPath, "--api-key", key, "search", "engine=google_lens", "--image", writeTestPNG(t),
+		"--jq", ".search_parameters.image_id")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("search with --image failed: %v\n%s", err, out)
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		t.Error("expected the uploaded image_id in search_parameters")
+	}
+}
+
+func TestSearchWithImageConflictsWithImageID(t *testing.T) {
+	cmd := exec.Command(binaryPath, "--api-key", "irrelevant", "search", "engine=google_lens", "image_id=abc", "--image", writeTestPNG(t))
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected failure when both --image and image_id are given")
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 2 {
+		t.Errorf("expected exit code 2, got %d", exitErr.ExitCode())
 	}
 }
 
