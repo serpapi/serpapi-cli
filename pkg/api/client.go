@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
@@ -18,6 +23,10 @@ const (
 	defaultTimeout     = 30 * time.Second
 	maxResponseBytes   = 100 << 20 // 100 MB
 )
+
+// quoteEscaper mirrors the escaping mime/multipart applies to form-data
+// header values.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
 
 // Client is an HTTP client for the SerpApi service.
 type Client struct {
@@ -60,6 +69,48 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
 	}
+	return c.do(req)
+}
+
+// doPostMultipart sends a multipart/form-data POST request. params are sent as
+// form fields alongside a single file part named fieldName.
+func (c *Client) doPostMultipart(ctx context.Context, endpoint string, params map[string]string, fieldName, fileName string, content []byte) ([]byte, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range params {
+		if err := w.WriteField(k, v); err != nil {
+			return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+		}
+	}
+
+	// CreateFormFile hardcodes application/octet-stream, so build the part
+	// header by hand to send the sniffed image content type.
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`,
+		quoteEscaper.Replace(fieldName), quoteEscaper.Replace(fileName)))
+	h.Set("Content-Type", http.DetectContentType(content))
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+	if _, err := part.Write(content); err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+	if err := w.Close(); err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, &body)
+	if err != nil {
+		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	return c.do(req)
+}
+
+// do executes the request and returns the body after validating that the
+// response is a successful JSON payload.
+func (c *Client) do(req *http.Request) ([]byte, error) {
 	req.Header.Set("User-Agent", c.userAgent())
 
 	resp, err := c.http.Do(req)
@@ -163,6 +214,54 @@ func (c *Client) Locations(ctx context.Context, params map[string]string) (json.
 		return nil, &clierrors.APIError{Message: "Unexpected response from locations endpoint"}
 	}
 	return json.RawMessage(body), nil
+}
+
+// UploadImage uploads an image file using the Image API. The returned payload
+// contains an image_id usable with engines that accept uploaded images, such
+// as google_lens. Image IDs expire after 10 minutes.
+func (c *Client) UploadImage(ctx context.Context, path string) (json.RawMessage, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, &clierrors.UsageError{Message: "Cannot read image file: " + err.Error()}
+	}
+	return c.UploadImageBytes(ctx, content, filepath.Base(path))
+}
+
+// UploadImageBytes uploads an in-memory image using the Image API. fileName
+// is sent as the multipart filename; when empty, one is derived from the
+// detected content type.
+func (c *Client) UploadImageBytes(ctx context.Context, content []byte, fileName string) (json.RawMessage, error) {
+	if fileName == "" {
+		fileName = defaultImageFileName(content)
+	}
+
+	params := map[string]string{}
+	if c.apiKey != "" {
+		params["api_key"] = c.apiKey
+	}
+
+	body, err := c.doPostMultipart(ctx, "/image", params, "image", fileName, content)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAPIError(body); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+// defaultImageFileName picks a filename with an extension matching the
+// sniffed image type, for uploads that have no natural filename (e.g. stdin).
+func defaultImageFileName(content []byte) string {
+	switch http.DetectContentType(content) {
+	case "image/jpeg":
+		return "image.jpg"
+	case "image/png":
+		return "image.png"
+	case "image/webp":
+		return "image.webp"
+	}
+	return "image"
 }
 
 // Archive retrieves a previously cached search result by ID.
