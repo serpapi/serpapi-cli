@@ -68,6 +68,23 @@ serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq '.organic_r
 
 `async=true` returns at once with `search_metadata.id`; collect the results with `serpapi archive`.
 
+#### Image Search (Google Lens)
+
+- `--image <file>` — Upload an image with the [Image API](https://serpapi.com/image-api) and search with its `image_id` in one step. Use `-` to read the image from stdin.
+
+```bash
+# Reverse image search with Google Lens
+serpapi search engine=google_lens --image ./photo.jpg
+
+# Pipe an image in from another command
+curl -s https://example.com/photo.jpg | serpapi search engine=google_lens --image -
+
+# Keep only the visual matches
+serpapi search engine=google_lens --image ./photo.jpg --jq ".visual_matches[:5]"
+```
+
+Supported formats are JPG/JPEG, PNG and WebP up to 500 KB. See the [Google Lens image upload docs](https://serpapi.com/google-lens-upload-an-image).
+
 ### archive
 
 Fetches an earlier search by its `search_metadata.id`, for free. A search made with `async=true` has `search_metadata.status` `Queued` or `Processing` until it is `Success`, so poll. `output=` takes the same values as in search.
@@ -91,6 +108,23 @@ Shows the plan, usage and searches left, for free. The API key in the output is 
 
 ```bash
 serpapi account --jq .total_searches_left
+```
+
+### image
+
+Upload an image with the [Image API](https://serpapi.com/image-api) and print its `image_id` without searching. Useful when you want to reuse the same upload across several searches; image IDs expire after 10 minutes. For a one-off search, prefer `serpapi search --image <file>`.
+
+```bash
+# Upload an image file
+serpapi image ./photo.jpg
+
+# Read the image from stdin
+curl -s https://example.com/photo.jpg | serpapi image -
+
+# Reuse the image_id across searches
+IMAGE_ID=$(serpapi image ./photo.jpg --jq .image_id)
+serpapi search engine=google_lens image_id=$IMAGE_ID
+serpapi search engine=google_lens image_id=$IMAGE_ID type=products
 ```
 
 ### login
