@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/serpapi/serpapi-cli/pkg/api"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
 	"github.com/serpapi/serpapi-cli/pkg/params"
 )
@@ -53,6 +52,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	paramsMap := params.ParamsToMap(parsed)
 	params.ApplyFields(paramsMap, fieldsFlag)
 
+	client, err := newClient(apiKey)
+	if err != nil {
+		return err
+	}
+
 	hasMaxPages := cmd.Flags().Changed("max-pages")
 
 	if hasMaxPages && !allPagesFlag {
@@ -63,7 +67,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		sp := newSpinner("Searching...")
 		sp.Start()
 		defer sp.Stop()
-		client := api.New(apiKey)
 		raw, err := client.Search(cmd.Context(), paramsMap)
 		if err != nil {
 			return err
@@ -82,7 +85,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		paramsMap["json_restrictor"] = paginationRestrictor
 	}
 
-	client := api.New(apiKey)
 	currentParams := paramsMap
 	var accumulated map[string]any
 	visitedPages := make(map[string]bool)

@@ -5,8 +5,6 @@ import (
 	"regexp"
 
 	"github.com/spf13/cobra"
-
-	"github.com/serpapi/serpapi-cli/pkg/api"
 )
 
 var accountCmd = &cobra.Command{
@@ -26,10 +24,14 @@ func runAccount(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	client, err := newClient(apiKey)
+	if err != nil {
+		return err
+	}
+
 	sp := newSpinner("Fetching account...")
 	sp.Start()
 	defer sp.Stop()
-	client := api.New(apiKey)
 	result, err := client.Account(cmd.Context())
 	if err != nil {
 		return err

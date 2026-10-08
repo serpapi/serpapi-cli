@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,24 +17,39 @@ import (
 )
 
 const (
-	defaultTimeout     = 30 * time.Second
-	maxResponseBytes   = 100 << 20 // 100 MB
+	// DefaultTimeout bounds a single HTTP request. Slow engines such as
+	// google_ai_mode can take well over 30s with no_cache=true, so this
+	// matches the 60s default used by the official serpapi-golang library.
+	DefaultTimeout   = 60 * time.Second
+	maxResponseBytes = 100 << 20 // 100 MB
 )
 
 // Client is an HTTP client for the SerpApi service.
 type Client struct {
 	apiKey  string
 	baseURL string
+	timeout time.Duration
 	http    *http.Client
 }
 
-// New creates a new SerpApi client. apiKey may be empty for unauthenticated requests.
+// New creates a new SerpApi client with DefaultTimeout. apiKey may be empty
+// for unauthenticated requests.
 func New(apiKey string) *Client {
+	return NewWithTimeout(apiKey, DefaultTimeout)
+}
+
+// NewWithTimeout creates a new SerpApi client whose requests are bounded by
+// timeout. A zero or negative timeout disables the limit entirely.
+func NewWithTimeout(apiKey string, timeout time.Duration) *Client {
+	if timeout < 0 {
+		timeout = 0
+	}
 	return &Client{
 		apiKey:  apiKey,
 		baseURL: "https://serpapi.com",
+		timeout: timeout,
 		http: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout: timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -64,6 +81,9 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if c.isTimeout(req, err) {
+			return nil, &clierrors.NetworkError{Message: c.timeoutMessage(), Cause: err}
+		}
 		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
 	}
 	defer resp.Body.Close()
@@ -102,6 +122,33 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 	}
 
 	return body, nil
+}
+
+// isTimeout reports whether err was caused by the client's own timeout rather
+// than by the caller cancelling the request context.
+func (c *Client) isTimeout(req *http.Request, err error) bool {
+	if c.timeout <= 0 {
+		return false
+	}
+	if ctxErr := req.Context().Err(); ctxErr != nil {
+		// The caller's context ended first (Ctrl-C, parent deadline, ...).
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func (c *Client) timeoutMessage() string {
+	return fmt.Sprintf(
+		"Request timed out after %gs waiting for SerpApi to respond. "+
+			"Slow engines (e.g. google_ai_mode) or no_cache=true can take longer; "+
+			"retry with --timeout <seconds> (0 to wait indefinitely). "+
+			"The search may still have completed server-side and be available in your SerpApi search archive.",
+		c.timeout.Seconds(),
+	)
 }
 
 // checkAPIError returns an APIError if the JSON body contains a top-level "error" key.

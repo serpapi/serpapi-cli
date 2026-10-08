@@ -3,7 +3,6 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/serpapi/serpapi-cli/pkg/api"
 	"github.com/serpapi/serpapi-cli/pkg/params"
 )
 
@@ -25,10 +24,14 @@ func runLocations(cmd *cobra.Command, args []string) error {
 	}
 
 	paramsMap := params.ParamsToMap(parsed)
+	client, err := newClient("")
+	if err != nil {
+		return err
+	}
+
 	sp := newSpinner("Fetching locations...")
 	sp.Start()
 	defer sp.Stop()
-	client := api.New("")
 	result, err := client.Locations(cmd.Context(), paramsMap)
 	if err != nil {
 		return err
