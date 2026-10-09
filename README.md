@@ -127,6 +127,22 @@ serpapi login
   # Or set it once for the shell session
   export SERPAPI_TIMEOUT=120
   ```
+- `--debug` — Print request tracing to stderr (env: `SERPAPI_DEBUG=1`): DNS, TCP connect, TLS handshake, time to first byte, response status and headers (including `Serpapi-Search-Id` and `X-Request-Id`), and body size. Each line carries a UTC wall-clock timestamp and the elapsed time since the request started, so you can correlate client-side waits with `search_metadata.created_at` / `processed_at`. The API key is redacted. Useful when a request times out or feels slow — the output shows whether time went to connecting, waiting for SerpApi to answer, or downloading the body. Stdout is unaffected, so `--jq` and piping still work.
+  ```bash
+  serpapi search --debug engine=google_ai_mode q="..." > result.json
+  ```
+  ```
+  [debug] 2026-10-09T11:01:53.569Z + 0.000s GET https://serpapi.com/search.json?api_key=[REDACTED]&engine=google&q=coffee
+  [debug] 2026-10-09T11:01:53.569Z + 0.000s Timeout: 60s
+  [debug] 2026-10-09T11:01:53.597Z + 0.028s DNS resolved: 162.159.142.21, 172.66.2.17
+  [debug] 2026-10-09T11:01:53.611Z + 0.042s Connected: tcp 162.159.142.21:443
+  [debug] 2026-10-09T11:01:53.643Z + 0.074s TLS handshake done: TLS 1.3, ALPN="h2"
+  [debug] 2026-10-09T11:01:53.644Z + 0.075s Request sent, waiting for response headers
+  [debug] 2026-10-09T11:01:54.421Z + 0.852s First response byte received
+  [debug] 2026-10-09T11:01:54.421Z + 0.852s Response: HTTP/2.0 200 OK
+  [debug] 2026-10-09T11:01:54.421Z + 0.852s   Serpapi-Search-Id: 6ac8c9a14a616bad61f13c29
+  [debug] 2026-10-09T11:01:54.422Z + 0.853s Body received: 57483 bytes
+  ```
 
 ## Configuration
 

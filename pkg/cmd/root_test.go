@@ -9,6 +9,36 @@ import (
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
 )
 
+func TestDebugEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		flag bool
+		env  string
+		want bool
+	}{
+		{name: "default off"},
+		{name: "flag on", flag: true, want: true},
+		{name: "env 1", env: "1", want: true},
+		{name: "env true", env: "true", want: true},
+		{name: "env 0", env: "0"},
+		{name: "env false", env: "FALSE"},
+		{name: "env off", env: "off"},
+		{name: "flag wins over env 0", flag: true, env: "0", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			debugFlag = tt.flag
+			t.Cleanup(func() { debugFlag = false })
+			t.Setenv("SERPAPI_DEBUG", tt.env)
+
+			if got := debugEnabled(); got != tt.want {
+				t.Errorf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestResolveTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
