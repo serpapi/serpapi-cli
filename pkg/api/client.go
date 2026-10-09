@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"time"
 
@@ -30,6 +31,7 @@ type Client struct {
 	baseURL string
 	timeout time.Duration
 	http    *http.Client
+	debug   io.Writer // nil unless SetDebugWriter was called
 }
 
 // New creates a new SerpApi client with DefaultTimeout. apiKey may be empty
@@ -62,6 +64,12 @@ func (c *Client) userAgent() string {
 }
 
 func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	return c.doGetTraced(ctx, endpoint, params, newTracer(c.debug))
+}
+
+// doGetTraced is doGet with a caller-supplied tracer, so callers can keep
+// logging against the same timeline after the response is read.
+func (c *Client) doGetTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -73,25 +81,46 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 	}
 	u.RawQuery = q.Encode()
 
+	if tr != nil {
+		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
 	}
 	req.Header.Set("User-Agent", c.userAgent())
 
+	if tr != nil {
+		tr.logf("GET %s", u.String())
+		tr.logf("User-Agent: %s", c.userAgent())
+		if c.timeout > 0 {
+			tr.logf("Timeout: %gs", c.timeout.Seconds())
+		} else {
+			tr.logf("Timeout: disabled")
+		}
+		if proxyURL, perr := http.ProxyFromEnvironment(req); perr == nil && proxyURL != nil {
+			tr.logf("Proxy: %s", proxyURL.Redacted())
+		}
+	}
+
 	resp, err := c.http.Do(req)
 	if err != nil {
+		tr.logf("Request failed: %v", err)
 		if c.isTimeout(req, err) {
 			return nil, &clierrors.NetworkError{Message: c.timeoutMessage(), Cause: err}
 		}
 		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
 	}
 	defer resp.Body.Close()
+	tr.logResponse(resp)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
+		tr.logf("Read body failed: %v", err)
 		return nil, &clierrors.NetworkError{Message: "Failed to read response: " + err.Error(), Cause: err}
 	}
+	tr.logf("Body received: %d bytes", len(body))
 	// Detect truncation: try reading one more byte; if it succeeds the body exceeded the limit.
 	if len(body) == maxResponseBytes {
 		var extra [1]byte
@@ -145,7 +174,7 @@ func (c *Client) timeoutMessage() string {
 	return fmt.Sprintf(
 		"Request timed out after %gs waiting for SerpApi to respond. "+
 			"Slow engines (e.g. google_ai_mode) or no_cache=true can take longer; "+
-			"retry with --timeout <seconds> (0 to wait indefinitely). "+
+			"retry with --timeout <seconds> (0 to wait indefinitely), or run with --debug to see where time was spent. "+
 			"The search may still have completed server-side and be available in your SerpApi search archive.",
 		c.timeout.Seconds(),
 	)
@@ -172,13 +201,15 @@ func (c *Client) Search(ctx context.Context, params map[string]string) (json.Raw
 		p["api_key"] = c.apiKey
 	}
 
-	body, err := c.doGet(ctx, "/search.json", p)
+	tr := newTracer(c.debug)
+	body, err := c.doGetTraced(ctx, "/search.json", p, tr)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkAPIError(body); err != nil {
 		return nil, err
 	}
+	tr.logSearchMetadata(body)
 	return json.RawMessage(body), nil
 }
 

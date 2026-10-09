@@ -127,6 +127,26 @@ serpapi login
   # Or set it once for the shell session
   export SERPAPI_TIMEOUT=120
   ```
+- `--debug` — Print request tracing to stderr (env: `SERPAPI_DEBUG=1`): DNS, TCP connect (local and remote address), TLS handshake, time to first byte, response status and headers (including `Serpapi-Search-Id` and `X-Request-Id`), and body size. Each line carries a UTC wall-clock timestamp and the elapsed time since the request started. For searches, the server's `search_metadata` timestamps are correlated against the client timeline so you can see whether a long wait happened before SerpApi created the search (network path, proxy, queueing), during processing (slow engine), or after processing finished. The API key is redacted. Stdout is unaffected, so `--jq` and piping still work.
+  ```bash
+  serpapi search --debug engine=google_ai_mode q="..." > result.json
+  ```
+  ```
+  [debug] 2026-10-09T11:50:54.272Z + 0.000s GET https://serpapi.com/search.json?api_key=[REDACTED]&engine=google&q=coffee
+  [debug] 2026-10-09T11:50:54.272Z + 0.000s Timeout: 60s
+  [debug] 2026-10-09T11:50:54.300Z + 0.028s DNS resolved: 162.159.142.21, 172.66.2.17
+  [debug] 2026-10-09T11:50:54.314Z + 0.042s Connected: tcp 162.159.142.21:443
+  [debug] 2026-10-09T11:50:54.346Z + 0.074s TLS handshake done: TLS 1.3, ALPN="h2"
+  [debug] 2026-10-09T11:50:54.413Z + 0.141s Using connection: 192.168.1.20:62494 -> 162.159.142.21:443 (new)
+  [debug] 2026-10-09T11:50:54.414Z + 0.142s Request sent, waiting for response headers
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s First response byte received
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s Response: HTTP/2.0 200 OK
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s   Serpapi-Search-Id: 6ac8d51eaf5fdcac5434ae91
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Body received: 57483 bytes
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Server search: id=6ac8d51eaf5fdcac5434ae91 status=Success total_time_taken=0.5s
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Server timeline: created_at=11:50:54Z (+0.0s after request sent), processed_at=11:50:54Z (+0.0s processing), headers received +1.2s after processed_at
+  ```
+  Server timestamps have one-second resolution, so sub-second deltas in the `Server timeline` line are noise. When the client waited noticeably longer than `total_time_taken`, a `Note:` line points at the phase that dominated.
 
 ## Configuration
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ var (
 	fieldsFlag  string
 	jqFlag      string
 	timeoutFlag string
+	debugFlag   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -55,6 +57,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&jqFlag, "jq", "", "Apply jq filter to output")
 	rootCmd.PersistentFlags().StringVar(&timeoutFlag, "timeout", "",
 		fmt.Sprintf("HTTP request timeout in seconds, 0 to disable (default %d; env: SERPAPI_TIMEOUT)", int(api.DefaultTimeout/time.Second)))
+	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false,
+		"Print request timing and connection details (DNS, TLS, first byte, headers) to stderr (env: SERPAPI_DEBUG=1)")
 
 	// Wrap cobra flag-parsing errors as UsageError so they get exit code 2.
 	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -111,13 +115,39 @@ func parseTimeout(raw, source string) (time.Duration, error) {
 	return time.Duration(secs * float64(time.Second)), nil
 }
 
-// newClient builds an API client honoring the configured request timeout.
+// debugEnabled reports whether --debug or SERPAPI_DEBUG is set.
+func debugEnabled() bool {
+	if debugFlag {
+		return true
+	}
+	switch strings.ToLower(os.Getenv("SERPAPI_DEBUG")) {
+	case "", "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+// newClient builds an API client honoring the configured request timeout
+// and debug tracing.
 func newClient(apiKey string) (*api.Client, error) {
 	timeout, err := resolveTimeout()
 	if err != nil {
 		return nil, err
 	}
-	return api.NewWithTimeout(apiKey, timeout), nil
+	client := api.NewWithTimeout(apiKey, timeout)
+	if debugEnabled() {
+		client.SetDebugWriter(os.Stderr)
+	}
+	return client, nil
+}
+
+// newSpinner creates a spinner with the given label. The spinner is disabled
+// in debug mode so its redraws don't interleave with trace output.
+func newSpinner(label string) *spinner.Spinner {
+	if debugEnabled() {
+		return &spinner.Spinner{}
+	}
+	return spinner.New(label)
 }
 
 // handleOutput applies --jq filtering and prints result.
@@ -145,9 +175,4 @@ func handleOutput(raw json.RawMessage) error {
 		return &clierrors.APIError{Message: fmt.Sprintf("Output error: %s", err)}
 	}
 	return nil
-}
-
-// newSpinner creates a spinner with the given label.
-func newSpinner(label string) *spinner.Spinner {
-	return spinner.New(label)
 }
