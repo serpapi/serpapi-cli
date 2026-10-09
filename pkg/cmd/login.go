@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/serpapi/serpapi-cli/pkg/api"
 	"github.com/serpapi/serpapi-cli/pkg/config"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
 )
@@ -30,7 +29,10 @@ func init() {
 func runLogin(cmd *cobra.Command, args []string) error {
 	// Check if already authenticated
 	if existingKey, ok := config.LoadAPIKey(); ok {
-		client := api.New(existingKey)
+		client, err := newClient(existingKey)
+		if err != nil {
+			return err
+		}
 		raw, err := client.Account(cmd.Context())
 		if err == nil {
 			var account struct {
@@ -80,7 +82,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return &clierrors.UsageError{Message: "API key cannot be empty."}
 	}
 
-	client := api.New(apiKey)
+	client, err := newClient(apiKey)
+	if err != nil {
+		return err
+	}
 	raw, err := client.Account(cmd.Context())
 	if err != nil {
 		return err

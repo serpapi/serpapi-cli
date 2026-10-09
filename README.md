@@ -119,6 +119,14 @@ serpapi login
   ```
   Quote the expression with single quotes in bash/zsh to avoid shell interpretation of `$`, `|`, and `"`.
 - `--api-key <key>` — Override API key (takes priority over environment and config file)
+- `--timeout <seconds>` — HTTP request timeout (default `60`, env: `SERPAPI_TIMEOUT`). Use `0` to wait indefinitely. Slow engines such as `google_ai_mode`, or searches with `no_cache=true`, can take longer than the default; raise this if you see a `network_error` mentioning `Client.Timeout exceeded`. Note that a timed-out search may still complete on SerpApi's side and be billed and retrievable with `serpapi archive <search-id>`.
+  ```bash
+  # Give an AI Mode query up to two minutes
+  serpapi search --timeout 120 engine=google_ai_mode q="..."
+
+  # Or set it once for the shell session
+  export SERPAPI_TIMEOUT=120
+  ```
 
 ## Configuration
 

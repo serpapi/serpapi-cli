@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/serpapi/serpapi-cli/pkg/api"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
 )
 
@@ -33,10 +32,14 @@ func runArchive(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	client, err := newClient(apiKey)
+	if err != nil {
+		return err
+	}
+
 	sp := newSpinner("Fetching archive...")
 	sp.Start()
 	defer sp.Stop()
-	client := api.New(apiKey)
 	result, err := client.Archive(cmd.Context(), id)
 	if err != nil {
 		return err
