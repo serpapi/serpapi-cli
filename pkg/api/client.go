@@ -64,6 +64,12 @@ func (c *Client) userAgent() string {
 }
 
 func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	return c.doGetTraced(ctx, endpoint, params, newTracer(c.debug))
+}
+
+// doGetTraced is doGet with a caller-supplied tracer, so callers can keep
+// logging against the same timeline after the response is read.
+func (c *Client) doGetTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -75,7 +81,6 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 	}
 	u.RawQuery = q.Encode()
 
-	tr := newTracer(c.debug)
 	if tr != nil {
 		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
 	}
@@ -196,13 +201,15 @@ func (c *Client) Search(ctx context.Context, params map[string]string) (json.Raw
 		p["api_key"] = c.apiKey
 	}
 
-	body, err := c.doGet(ctx, "/search.json", p)
+	tr := newTracer(c.debug)
+	body, err := c.doGetTraced(ctx, "/search.json", p, tr)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkAPIError(body); err != nil {
 		return nil, err
 	}
+	tr.logSearchMetadata(body)
 	return json.RawMessage(body), nil
 }
 
