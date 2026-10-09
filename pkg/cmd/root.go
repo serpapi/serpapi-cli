@@ -239,7 +239,7 @@ func init() {
 		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d; env SERPAPI_TIMEOUT)",
 		int(api.DefaultTimeout/time.Second)))
 	pf.BoolVar(&debugFlag, "debug", false,
-		"trace each request on stderr: DNS, connect, TLS, first byte and headers (env SERPAPI_DEBUG=1)")
+		"trace each request on stderr: DNS, connect, TLS, first byte, headers and the server timeline (env SERPAPI_DEBUG=1)")
 
 	rootCmd.PersistentPreRunE = validateGlobalFlags
 

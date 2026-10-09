@@ -86,6 +86,12 @@ func userAgent() string {
 
 // get performs a GET request and returns the body of a 200 response verbatim.
 func (c *Client) get(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	return c.getTraced(ctx, endpoint, params, c.newTracer())
+}
+
+// getTraced is get with a caller-supplied tracer, so Search can keep logging
+// against the same timeline after the body is read.
+func (c *Client) getTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -97,7 +103,6 @@ func (c *Client) get(ctx context.Context, endpoint string, params map[string]str
 	}
 	u.RawQuery = q.Encode()
 
-	tr := c.newTracer()
 	if tr != nil {
 		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
 	}
@@ -191,7 +196,11 @@ func errorMessage(body []byte) string {
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
-	body, err := c.get(ctx, endpoint, params)
+	return c.getJSONTraced(ctx, endpoint, params, c.newTracer())
+}
+
+func (c *Client) getJSONTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) (json.RawMessage, error) {
+	body, err := c.getTraced(ctx, endpoint, params, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -217,13 +226,23 @@ func (c *Client) searchParams(params map[string]string) map[string]string {
 
 // Search performs a search request. If the client has an API key it is added to params.
 func (c *Client) Search(ctx context.Context, params map[string]string) (json.RawMessage, error) {
-	return c.getObject(ctx, "/search.json", c.searchParams(params))
+	tr := c.newTracer()
+	body, err := c.getObjectTraced(ctx, "/search.json", c.searchParams(params), tr)
+	if err != nil {
+		return nil, err
+	}
+	tr.logSearchMetadata(body)
+	return body, nil
 }
 
 // getObject is getJSON for endpoints that answer with a JSON object, so a
 // stray null or array is an error rather than an empty-looking success.
 func (c *Client) getObject(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
-	body, err := c.getJSON(ctx, endpoint, params)
+	return c.getObjectTraced(ctx, endpoint, params, c.newTracer())
+}
+
+func (c *Client) getObjectTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) (json.RawMessage, error) {
+	body, err := c.getJSONTraced(ctx, endpoint, params, tr)
 	if err != nil {
 		return nil, err
 	}
