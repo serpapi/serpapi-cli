@@ -33,10 +33,15 @@ var (
 	fieldsFlag  string
 	jqFlag      string
 	timeoutFlag string
+	debugFlag   bool
 
 	// requestTimeout is --timeout, else SERPAPI_TIMEOUT, as validateGlobalFlags
 	// resolved it for this run.
 	requestTimeout = api.DefaultTimeout
+
+	// debugRequests is --debug, else SERPAPI_DEBUG, as validateGlobalFlags
+	// resolved it for this run.
+	debugRequests bool
 
 	// clientOptions are applied to every client after the defaults; tests use
 	// it to point the CLI at a local server.
@@ -233,6 +238,8 @@ func init() {
 	pf.StringVar(&timeoutFlag, "timeout", "", fmt.Sprintf(
 		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d; env SERPAPI_TIMEOUT)",
 		int(api.DefaultTimeout/time.Second)))
+	pf.BoolVar(&debugFlag, "debug", false,
+		"trace each request on stderr: DNS, connect, TLS, first byte and headers (env SERPAPI_DEBUG=1)")
 
 	rootCmd.PersistentPreRunE = validateGlobalFlags
 
@@ -275,6 +282,7 @@ func validateGlobalFlags(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	requestTimeout = timeout
+	debugRequests = resolveDebug()
 	if fieldsFlag != "" && cmd != searchCmd {
 		return &clierrors.UsageError{Message: "--fields works only with search; use --jq to filter " + cmd.Name() + " output"}
 	}
@@ -322,6 +330,19 @@ func parseTimeout(raw, source string) (time.Duration, error) {
 	return d, nil
 }
 
+// resolveDebug returns --debug, else whether SERPAPI_DEBUG is set to anything
+// but an off value (empty, 0, false, no, off).
+func resolveDebug() bool {
+	if debugFlag {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SERPAPI_DEBUG"))) {
+	case "", "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
 // resolveAPIKey returns the first non-empty key from --api-key, the
 // environment, then the config file.
 func resolveAPIKey() (string, error) {
@@ -337,13 +358,20 @@ func resolveAPIKey() (string, error) {
 }
 
 func newClient(apiKey string) *api.Client {
-	opts := append([]api.Option{api.WithTimeout(requestTimeout)}, clientOptions...)
-	return api.New(apiKey, opts...)
+	opts := []api.Option{api.WithTimeout(requestTimeout)}
+	if debugRequests {
+		opts = append(opts, api.WithDebug(rootCmd.ErrOrStderr()))
+	}
+	return api.New(apiKey, append(opts, clientOptions...)...)
 }
 
 // withSpinner shows a spinner on an interactive stderr while fn runs and
-// clears it before the caller prints anything.
+// clears it before the caller prints anything. In debug mode the trace
+// replaces it, so its redraws don't interleave with the trace lines.
 func withSpinner[T any](label string, fn func() (T, error)) (T, error) {
+	if debugRequests {
+		return fn()
+	}
 	sp := spinner.New(label)
 	sp.Start()
 	defer sp.Stop()

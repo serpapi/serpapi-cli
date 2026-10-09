@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
@@ -36,6 +37,9 @@ type Client struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+
+	// debug, if set, receives a trace of each request; see WithDebug.
+	debug io.Writer
 }
 
 // Option configures a Client.
@@ -93,22 +97,32 @@ func (c *Client) get(ctx context.Context, endpoint string, params map[string]str
 	}
 	u.RawQuery = q.Encode()
 
+	tr := c.newTracer()
+	if tr != nil {
+		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid request: " + endpoint, Cause: err}
 	}
 	req.Header.Set("User-Agent", userAgent())
+	tr.logRequest(req, c.http.Timeout)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		tr.logf("Request failed: %v", err)
 		return nil, c.networkError(endpoint, err)
 	}
 	defer resp.Body.Close()
+	tr.logResponse(resp)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBytes)+1))
 	if err != nil {
+		tr.logf("Read body failed: %v", err)
 		return nil, c.networkError(endpoint, err)
 	}
+	tr.logf("Body received: %d bytes", len(body))
 
 	if resp.StatusCode != http.StatusOK {
 		message := fmt.Sprintf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
@@ -134,7 +148,7 @@ func (c *Client) networkError(endpoint string, err error) error {
 	if c.http.Timeout > 0 && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())) {
 		return &clierrors.NetworkError{
 			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
-				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely. "+
+				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely, or run with --debug to see where time was spent. "+
 				"The search may still finish on SerpApi's side, count against your searches and be available in your search archive",
 				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout)),
 			Cause: cause,
