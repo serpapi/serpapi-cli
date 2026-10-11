@@ -2,6 +2,8 @@ package output
 
 import (
 	"bytes"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -76,6 +78,16 @@ func TestPrintJSONIndentsWhenNotATerminal(t *testing.T) {
 	}
 }
 
+func TestPrintJSONKeepsInvalidInput(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintJSON(&buf, []byte("not json\n")); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "not json\n" {
+		t.Errorf("got %q", buf.String())
+	}
+}
+
 func TestPrintRaw(t *testing.T) {
 	for in, want := range map[string]string{"": "", "# Title": "# Title\n", "a\n": "a\n"} {
 		var buf bytes.Buffer
@@ -86,4 +98,46 @@ func TestPrintRaw(t *testing.T) {
 			t.Errorf("PrintRaw(%q) = %q, want %q", in, buf.String(), want)
 		}
 	}
+}
+
+func FuzzPrintJSONPiped(f *testing.F) {
+	f.Add([]byte(`{"a": [1, 2.50, 1e400, 12345678901234567890], "b": "<&> café \u2028"}`))
+	f.Add([]byte(`  null `))
+	f.Add([]byte(`{"truncated":`))
+	f.Add([]byte("{\"\":0}\n\u0085"))
+	f.Add([]byte("{\"a\":1}\u00a0"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var buf bytes.Buffer
+		if err := PrintJSON(&buf, data); err != nil {
+			t.Fatal(err)
+		}
+		out := buf.Bytes()
+		if !json.Valid(data) {
+			if want := append(bytes.TrimSpace(data), '\n'); !bytes.Equal(out, want) {
+				t.Fatalf("invalid JSON %q changed to %q", data, out)
+			}
+			return
+		}
+		var want bytes.Buffer
+		if err := json.Indent(&want, bytes.TrimRight(data, " \t\r\n"), "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(out, append(want.Bytes(), '\n')) {
+			t.Fatalf("piped output is not the indented input: %q -> %q", data, out)
+		}
+		if a, b := decodeNumbers(t, data), decodeNumbers(t, out); !reflect.DeepEqual(a, b) {
+			t.Fatalf("indenting changed the value: %q -> %q", data, out)
+		}
+	})
+}
+
+func decodeNumbers(t *testing.T, data []byte) any {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

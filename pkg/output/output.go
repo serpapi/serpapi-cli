@@ -48,9 +48,10 @@ func PrintJSON(w io.Writer, data []byte) error {
 }
 
 // FormatJSON returns a JSON document as it is shown on w, preserving key
-// order. A terminal gets it indented, through ForTerminal, and colored
-// (unless NO_COLOR is set); anything else, such as a pipe, gets it indented as
-// tidwall/pretty formats it.
+// order. A terminal gets it indented and colored (unless NO_COLOR is set);
+// anything else, such as a pipe or an agent reading stdout, gets it indented
+// by two spaces per level, so that head, grep and line-based file viewers show
+// part of it. Input that isn't JSON comes back as is.
 func FormatJSON(w io.Writer, data []byte) []byte {
 	if IsTerminal(w) {
 		out := ForTerminal(pretty.Pretty(data))
@@ -59,7 +60,17 @@ func FormatJSON(w io.Writer, data []byte) []byte {
 		}
 		return out
 	}
-	return pretty.Pretty(data)
+
+	var buf bytes.Buffer
+	buf.Grow(len(data) + len(data)/4 + 1)
+	// Only JSON's own whitespace: json.Indent keeps trailing spaces, and
+	// trimming Unicode spaces too would accept a body that isn't JSON.
+	if err := json.Indent(&buf, bytes.TrimRight(data, " \t\r\n"), "", "  "); err != nil {
+		buf.Reset()
+		buf.Write(bytes.TrimSpace(data))
+	}
+	buf.WriteByte('\n')
+	return buf.Bytes()
 }
 
 // PrintRaw writes a non-JSON response body (Markdown, HTML, CSV) to w as is,
