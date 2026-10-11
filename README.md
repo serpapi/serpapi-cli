@@ -1,6 +1,6 @@
 # serpapi-cli
 
-> HTTP client for structured web search data via SerpApi
+> Search engine results as JSON from [SerpApi](https://serpapi.com), for people, scripts and AI agents
 
 ## Installation
 
@@ -24,102 +24,90 @@ go install github.com/serpapi/serpapi-cli/cmd/serpapi@latest
 ## Quick Start
 
 ```bash
-# Authenticate
-serpapi login
-
-# Perform a search
-serpapi search engine=google q=coffee
+serpapi login                                    # check and save your API key
+serpapi search engine=google q=coffee            # JSON results
+serpapi search engine=google coffee --fields "organic_results[].{title, link}"
+serpapi search engine=google q=coffee output=md  # Markdown
 ```
+
+`serpapi --help` and each command's `--help` document parameters, errors and costs.
 
 ## Commands
 
 ### search
 
-Perform a search with any supported SerpApi engine. Parameters are passed as bare `key=value` pairs.
+Parameters are `key=value` pairs sent to the API as-is; words without `=` are joined into `q`, and a parameter given twice keeps its last value, with a warning. Each engine's parameters are listed at <https://serpapi.com/search-engine-apis>. Some engines name the query differently: `search_query` (YouTube), `k` (Amazon), `_nkw` (eBay), `query` (Walmart, Naver), `p` (Yahoo), `text` (Yandex).
 
 ```bash
-# Basic search
-serpapi search engine=google q=coffee
-
-# Multiple parameters
-serpapi search engine=google q="coffee shops" location="Austin,TX"
-
-# Use a different engine
-serpapi search engine=google_maps q="pizza" ll="@40.7455096,-74.0083012,14z"
-
-# With server-side field filtering (reduces response size at API level)
-serpapi search --fields "organic_results[].{title,link}" engine=google q=coffee
-
-# With client-side jq filtering (like gh --jq)
-serpapi search --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=google q=coffee
-
-# Both: server-side reduces payload, then client-side refines
-serpapi search --fields "organic_results" --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=google q=coffee
+serpapi search engine=google q="coffee shops" location="Austin, Texas, United States"
+serpapi search engine=youtube search_query="lofi beats" --jq '.video_results[:3][].link'
+serpapi search engine=google_maps q=pizza ll="@40.7455096,-74.0083012,14z" --fields "local_results[0:5]"
 ```
 
-#### Pagination Flags
+`--fields` sets SerpApi's [`json_restrictor`](https://serpapi.com/json-restrictor), so the server returns only the listed paths:
 
-- `--all-pages` — Fetch all result pages and merge array fields across pages
-- `--max-pages <n>` — Maximum number of pages to fetch when using `--all-pages`
+| `--fields` | Returns |
+|---|---|
+| `organic_results[0:3]` | the first three results |
+| `organic_results[].{title, link}` | two fields of every result |
+| `search_metadata.id,local_results[0]` | several paths, comma-separated |
+
+Unknown paths are dropped silently; if nothing matches, you get `{}` and a warning on stderr. The server also drops `null`, `false` and empty values. `--fields` is part of the cache key, so a different `--fields` can miss the cache and count as a new search; `--jq` filters the response locally without changing the request.
+
+`output=md` returns Markdown; `html`, `plain` and `csv` are also available. They are not JSON, so `--jq` and `--all-pages` don't apply.
+
+`--all-pages` follows `serpapi_pagination.next` and merges the arrays of every page into one object, up to `--max-pages` pages (default 100). Each page is one search. It stops at a page that `--fields` matches nothing on, so a typo costs one search; to page past such pages, filter with `--jq` instead. If a later page fails, or Ctrl-C stops the run, the pages fetched so far are printed and the error says which page it stopped at.
 
 ```bash
-# Fetch all pages and merge array results
-serpapi search engine=google q=coffee --all-pages
-
-# Limit to first 3 pages
-serpapi search engine=google q=coffee --all-pages --max-pages 3
+serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq '.organic_results | length'
 ```
 
-### account
+`async=true` returns at once with `search_metadata.id`; collect the results with `serpapi archive`.
 
-Retrieve account information and usage statistics.
+### archive
+
+Fetches an earlier search by its `search_metadata.id`, for free. A search made with `async=true` has `search_metadata.status` `Queued` or `Processing` until it is `Success`, so poll. `output=` takes the same values as in search.
 
 ```bash
-serpapi account
+serpapi archive 6a2b3c4d5e6f7a8b9c0d1e2f
+serpapi archive 6a2b3c4d5e6f7a8b9c0d1e2f output=md
 ```
 
 ### locations
 
-Lookup available locations for search queries (no API key required).
+Finds values for the `location` search parameter: pass a result's `canonical_name`. Free, and needs no API key. `limit` is at most 10. A query is required, because without one the API returns every location (66 MB).
 
 ```bash
-# Find locations matching "austin"
-serpapi locations q=austin num=5
+serpapi locations q=Austin limit=3 --jq '.[0].canonical_name'
 ```
 
-### archive
+### account
 
-Retrieve a previously cached search by ID.
+Shows the plan, usage and searches left, for free. The API key in the output is masked.
 
 ```bash
-serpapi archive <search-id>
+serpapi account --jq .total_searches_left
 ```
 
 ### login
 
-Interactive authentication flow to save API key to config file.
+Checks an API key with a free account request, then saves it. The key comes from `--api-key`, a hidden prompt on a terminal, or else the first line of stdin, which `login` waits for.
 
 ```bash
 serpapi login
+printf %s "$KEY" | serpapi login
 ```
+
+### version
+
+Prints the CLI version, as `--version` does.
 
 ## Global Flags
 
-- `--fields <expr>` — Server-side field filtering (maps to SerpApi's `json_restrictor` parameter). Note: The `--fields` filter uses SerpApi's server-side field restrictor syntax—see [SerpApi docs](https://serpapi.com) for supported expressions.
-- `--jq <expr>` — Client-side [jq](https://jqlang.github.io/jq/) filter applied to the JSON response, same as `gh --jq` (see the [jq tutorial](https://jqlang.github.io/jq/tutorial/) for syntax). Runs locally after the API call; the jq engine is embedded so no external `jq` install is required. Use `--fields` to shrink the payload server-side, then `--jq` to reshape it client-side. Examples:
-  ```bash
-  # Pick the first 3 organic results, keeping only title and link
-  serpapi search --jq '.organic_results[0:3] | [.[] | {title, link}]' engine=google q=coffee
-
-  # Print just the link of each organic result
-  serpapi search --jq '.organic_results[].link' engine=google q=coffee
-
-  # Count organic results
-  serpapi search --jq '.organic_results | length' engine=google q=coffee
-  ```
-  Quote the expression with single quotes in bash/zsh to avoid shell interpretation of `$`, `|`, and `"`.
-- `--api-key <key>` — Override API key (takes priority over environment and config file)
-- `--timeout <seconds>` — HTTP request timeout (default `60`, env: `SERPAPI_TIMEOUT`). Use `0` to wait indefinitely. Slow engines such as `google_ai_mode`, or searches with `no_cache=true`, can take longer than the default; raise this if you see a `network_error` mentioning `Client.Timeout exceeded`. Note that a timed-out search may still complete on SerpApi's side and be billed and retrievable with `serpapi archive <search-id>`.
+- `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
+- `--fields <expr>`: search only; see [search](#search).
+- `--api-key <key>`: API key. Prefer `SERPAPI_KEY`, since flags show up in `ps` and shell history.
+- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
   ```bash
   # Give an AI Mode query up to two minutes
   serpapi search --timeout 120 engine=google_ai_mode q="..."
@@ -130,45 +118,46 @@ serpapi login
 
 ## Configuration
 
-### Authentication Priority Chain
+The API key comes from the first of:
 
-The CLI checks for API keys in this order:
+1. `--api-key`
+2. `SERPAPI_KEY`
+3. `SERPAPI_API_KEY`
+4. the key saved by `serpapi login`
 
-1. `--api-key` flag
-2. `SERPAPI_KEY` environment variable
-3. Config file: `~/.config/serpapi/config.toml`
+Without a key, `search` still runs, but the API answers only a few demo queries such as `q=coffee` and returns 401 for the rest. `account` and `archive` need a key.
 
-If no API key is found, run `serpapi login` to authenticate interactively.
-
-> **Security note:** For security, prefer setting `SERPAPI_KEY` as an environment variable over
-> passing `--api-key` on the command line (command-line arguments are visible in process listings).
-
-### Config File Format
+`serpapi login` saves the key, readable only by you, to `serpapi/config.toml` in the OS config directory: `$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows.
 
 ```toml
 api_key = "your_serpapi_key_here"
 ```
 
+A config file that can't be read or isn't valid TOML is reported by path and line, never by content: `search` warns and runs without a key, while `account` and `archive` stop. `serpapi login` rewrites it.
+
 ## For AI Agents
 
-This CLI is optimized for consumption by AI agents (Claude, Codex, etc.):
+`serpapi --help` is the full contract. In short:
 
-- **Use `--fields` for server-side filtering** to reduce token usage:
-  - Example: `--fields "organic_results[0:3]"` returns only first 3 results
-  - Filtering happens at the API level, saving bandwidth and context window tokens
-  - Syntax follows SerpApi's `json_restrictor` parameter
-- **Use `--jq` for client-side filtering** (same as `gh --jq`):
-  - Example: `--jq ".organic_results | length"` counts results locally
-  - Full jq expression support: pipes, array slicing, object construction, `select`, `map`, etc.
-  - Runs after API response is received
-- **Combine both** for maximum efficiency:
-  - `--fields` reduces the API response size (less bandwidth)
-  - `--jq` refines the result further (less context window tokens)
-- **Exit codes**:
-  - `0` = success
-  - `1` = API error (invalid key, rate limit, etc.)
-  - `2` = usage error (missing arguments, invalid flags)
-- **Errors are always JSON** on stderr for structured parsing
+- **stdout carries only results**: JSON indented by two spaces, colored on a terminal. Piped, it is indented too, so `head`, `grep` and file viewers show whole lines; `head` cuts the JSON short, so take parts with `--jq`. A terminal gets control characters from results escaped, so a page can't drive it; piped output keeps them. Shrink them on the server with `--fields`, then locally with `--jq`, or ask for `output=md`.
+- **Unfamiliar engine?** Responses are often 20–300 KB, and one key can be large too (Maps `place_results` holds reviews and photos). Piped without `--jq`, a result over 16 KB comes with a warning on stderr that lists its top-level keys by size, unless stderr goes into the same pipe (`2>&1`), where it would break a JSON parser. Print a sample with one item per array, `--jq 'walk(if type == "array" then .[:1] else . end)'`; nested arrays are cut too, so it shows the shape, not the answer. Then take what you need from the stored search for free: `serpapi archive SEARCH_METADATA_ID --jq '...'`.
+- **Errors and warnings go to stderr**, one JSON object per line:
+  ```
+  {"error":{"code":"api_error","message":"Invalid API key. ...","status":401}}
+  {"warning":{"message":"..."}}
+  ```
+- **The exit code says what to do next**:
+
+  | Exit | `code` | Meaning |
+  |---|---|---|
+  | 0 | | Success; warnings may still be on stderr. |
+  | 2 | `usage_error` | The command is wrong; fix it before retrying. |
+  | 1 | `api_error` | `status` is the HTTP status: 200 the search ran but reported a problem, such as no results; 400 invalid parameters; 401 invalid API key; 403 account not allowed; 429 rate limited or out of searches; 5xx SerpApi failed. No `status`: the response was unreadable. |
+  | 1 | `network_error` | No answer, such as a timeout. |
+  | 130 | `interrupted` | Stopped by Ctrl-C or SIGTERM after printing what had arrived, such as the `--all-pages` pages fetched so far. |
+
+- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `account`, `locations` and `archive` are free.
+- **No prompts without a terminal.** Only `serpapi login` reads stdin, and it waits for the first line, so pipe the key in (`printf %s "$KEY" | serpapi login`) or, simpler, set `SERPAPI_KEY`.
 
 ## Links
 
