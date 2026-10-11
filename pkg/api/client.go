@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
@@ -17,51 +19,69 @@ import (
 )
 
 const (
-	// DefaultTimeout bounds a single HTTP request. Slow engines such as
-	// google_ai_mode can take well over 30s with no_cache=true, so this
-	// matches the 60s default used by the official serpapi-golang library.
-	DefaultTimeout   = 60 * time.Second
-	maxResponseBytes = 100 << 20 // 100 MB
+	// DefaultBaseURL is the SerpApi production endpoint.
+	DefaultBaseURL = "https://serpapi.com"
+	// DefaultTimeout bounds one HTTP request, including reading the response
+	// body. It matches the 60s default of the official serpapi-golang library.
+	// Slow engines such as google_ai_mode can take longer with no_cache=true,
+	// and SerpApi still finishes and counts a search the client gave up on.
+	DefaultTimeout = 60 * time.Second
 )
+
+// maxResponseBytes caps the response body; a variable so tests can lower it.
+var maxResponseBytes = 100 << 20
 
 // Client is an HTTP client for the SerpApi service.
 type Client struct {
 	apiKey  string
 	baseURL string
-	timeout time.Duration
 	http    *http.Client
 }
 
-// New creates a new SerpApi client with DefaultTimeout. apiKey may be empty
-// for unauthenticated requests.
-func New(apiKey string) *Client {
-	return NewWithTimeout(apiKey, DefaultTimeout)
+// Option configures a Client.
+type Option func(*Client)
+
+// WithBaseURL points the client at a different SerpApi-compatible host.
+func WithBaseURL(baseURL string) Option {
+	return func(c *Client) { c.baseURL = strings.TrimRight(baseURL, "/") }
 }
 
-// NewWithTimeout creates a new SerpApi client whose requests are bounded by
-// timeout. A zero or negative timeout disables the limit entirely.
+// WithTimeout sets the per-request timeout. Zero or negative disables it.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) { c.http.Timeout = max(d, 0) }
+}
+
+// NewWithTimeout creates a client whose requests are bounded by timeout; zero
+// or negative disables the limit.
 func NewWithTimeout(apiKey string, timeout time.Duration) *Client {
-	if timeout < 0 {
-		timeout = 0
-	}
-	return &Client{
+	return New(apiKey, WithTimeout(timeout))
+}
+
+// New creates a new SerpApi client. apiKey may be empty for unauthenticated requests.
+func New(apiKey string, opts ...Option) *Client {
+	c := &Client{
 		apiKey:  apiKey,
-		baseURL: "https://serpapi.com",
-		timeout: timeout,
+		baseURL: DefaultBaseURL,
 		http: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			Timeout: DefaultTimeout,
+			// Never follow redirects: the request URL carries the API key.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
-func (c *Client) userAgent() string {
+func userAgent() string {
 	return "serpapi-go-cli/" + version.Version
 }
 
-func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+// get performs a GET request and returns the body of a 200 response verbatim.
+func (c *Client) get(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -73,97 +93,104 @@ func (c *Client) doGet(ctx context.Context, endpoint string, params map[string]s
 	}
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
+		return nil, &clierrors.NetworkError{Message: "Invalid request: " + endpoint, Cause: err}
 	}
-	req.Header.Set("User-Agent", c.userAgent())
+	req.Header.Set("User-Agent", userAgent())
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		if c.isTimeout(req, err) {
-			return nil, &clierrors.NetworkError{Message: c.timeoutMessage(), Cause: err}
-		}
-		return nil, &clierrors.NetworkError{Message: err.Error(), Cause: err}
+		return nil, c.networkError(endpoint, err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBytes)+1))
 	if err != nil {
-		return nil, &clierrors.NetworkError{Message: "Failed to read response: " + err.Error(), Cause: err}
-	}
-	// Detect truncation: try reading one more byte; if it succeeds the body exceeded the limit.
-	if len(body) == maxResponseBytes {
-		var extra [1]byte
-		if n, _ := resp.Body.Read(extra[:]); n > 0 {
-			return nil, &clierrors.APIError{Message: "Response exceeded 100 MB limit"}
-		}
+		return nil, c.networkError(endpoint, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Try to extract error message from JSON body
-		var parsed map[string]any
-		if json.Unmarshal(body, &parsed) == nil {
-			if errVal, ok := parsed["error"]; ok {
-				if msg, ok := errVal.(string); ok {
-					return nil, &clierrors.APIError{Message: msg}
-				}
-			}
+		message := fmt.Sprintf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+		if msg := errorMessage(body); msg != "" {
+			message = msg
 		}
-		return nil, &clierrors.APIError{
-			Message: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode)),
-		}
+		return nil, &clierrors.APIError{Message: message, Status: resp.StatusCode}
 	}
-
-	// Validate response is JSON (guard against HTML error pages with 200 status).
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
-		return nil, &clierrors.APIError{Message: "Unexpected non-JSON response from server"}
+	if len(body) > maxResponseBytes {
+		return nil, &clierrors.APIError{Message: "Response exceeded 100 MB limit"}
 	}
-
 	return body, nil
 }
 
-// isTimeout reports whether err was caused by the client's own timeout rather
-// than by the caller cancelling the request context.
-func (c *Client) isTimeout(req *http.Request, err error) bool {
-	if c.timeout <= 0 {
-		return false
-	}
-	if ctxErr := req.Context().Err(); ctxErr != nil {
-		// The caller's context ended first (Ctrl-C, parent deadline, ...).
-		return false
+// networkError describes a transport failure without the request URL, which contains the API key.
+func (c *Client) networkError(endpoint string, err error) error {
+	cause := err
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		cause = urlErr.Err
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
+	if c.http.Timeout > 0 && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())) {
+		return &clierrors.NetworkError{
+			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
+				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely. "+
+				"The search may still finish on SerpApi's side, count against your searches and be available in your search archive",
+				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout)),
+			Cause: cause,
+		}
 	}
-	return errors.Is(err, context.DeadlineExceeded)
+	return &clierrors.NetworkError{
+		Message: fmt.Sprintf("Request to %s failed: %v", endpoint, cause),
+		Cause:   cause,
+	}
 }
 
-func (c *Client) timeoutMessage() string {
-	return fmt.Sprintf(
-		"Request timed out after %gs waiting for SerpApi to respond. "+
-			"Slow engines (e.g. google_ai_mode) or no_cache=true can take longer; "+
-			"retry with --timeout <seconds> (0 to wait indefinitely). "+
-			"The search may still have completed server-side and be available in your SerpApi search archive.",
-		c.timeout.Seconds(),
-	)
+// suggestedTimeout is the --timeout to suggest after d ran out: twice d in
+// whole seconds, and at least 120.
+func suggestedTimeout(d time.Duration) int64 {
+	return max(int64((2*d+time.Second-1)/time.Second), 120)
 }
 
-// checkAPIError returns an APIError if the JSON body contains a top-level "error" key.
-func checkAPIError(body []byte) error {
+// seconds formats d the way --timeout takes it: 60s rather than 1m0s.
+func seconds(d time.Duration) string {
+	if d%time.Second == 0 {
+		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
+	}
+	return d.String()
+}
+
+// errorMessage returns the top-level "error" string of a JSON object body, if any.
+func errorMessage(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return ""
+	}
 	var envelope struct {
-		Error string `json:"error"`
+		Error any `json:"error"`
 	}
-	if json.Unmarshal(body, &envelope) == nil && envelope.Error != "" {
-		return &clierrors.APIError{Message: envelope.Error}
+	if json.Unmarshal(trimmed, &envelope) != nil {
+		return ""
 	}
-	return nil
+	msg, _ := envelope.Error.(string)
+	return msg
 }
 
-// Search performs a search request. If the client has an API key it is added to params.
-func (c *Client) Search(ctx context.Context, params map[string]string) (json.RawMessage, error) {
+func (c *Client) getJSON(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
+	body, err := c.get(ctx, endpoint, params)
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(body) {
+		return nil, &clierrors.APIError{Message: "Unexpected non-JSON response from server"}
+	}
+	if msg := errorMessage(body); msg != "" {
+		return nil, &clierrors.APIError{Message: msg, Status: http.StatusOK}
+	}
+	return json.RawMessage(body), nil
+}
+
+func (c *Client) searchParams(params map[string]string) map[string]string {
 	p := make(map[string]string, len(params)+1)
 	for k, v := range params {
 		p[k] = v
@@ -171,57 +198,74 @@ func (c *Client) Search(ctx context.Context, params map[string]string) (json.Raw
 	if c.apiKey != "" {
 		p["api_key"] = c.apiKey
 	}
+	return p
+}
 
-	body, err := c.doGet(ctx, "/search.json", p)
+// Search performs a search request. If the client has an API key it is added to params.
+func (c *Client) Search(ctx context.Context, params map[string]string) (json.RawMessage, error) {
+	return c.getObject(ctx, "/search.json", c.searchParams(params))
+}
+
+// getObject is getJSON for endpoints that answer with a JSON object, so a
+// stray null or array is an error rather than an empty-looking success.
+func (c *Client) getObject(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
+	body, err := c.getJSON(ctx, endpoint, params)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkAPIError(body); err != nil {
+	if bytes.TrimSpace(body)[0] != '{' {
+		return nil, &clierrors.APIError{Message: "Unexpected response from server: not a JSON object"}
+	}
+	return body, nil
+}
+
+// getRaw returns a 200 body verbatim unless it is a JSON error object, which
+// SerpApi sends instead of the requested format when a search fails.
+func (c *Client) getRaw(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	body, err := c.get(ctx, endpoint, params)
+	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(body), nil
+	if msg := errorMessage(body); msg != "" {
+		return nil, &clierrors.APIError{Message: msg, Status: http.StatusOK}
+	}
+	return body, nil
+}
+
+// SearchRaw performs a search request and returns the body verbatim, for
+// non-JSON formats selected with the output parameter (for example output=md).
+func (c *Client) SearchRaw(ctx context.Context, params map[string]string) ([]byte, error) {
+	return c.getRaw(ctx, "/search.json", c.searchParams(params))
 }
 
 // Account retrieves account information.
 func (c *Client) Account(ctx context.Context) (json.RawMessage, error) {
-	params := map[string]string{"api_key": c.apiKey}
-
-	body, err := c.doGet(ctx, "/account.json", params)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkAPIError(body); err != nil {
-		return nil, err
-	}
-	return json.RawMessage(body), nil
+	return c.getObject(ctx, "/account.json", map[string]string{"api_key": c.apiKey})
 }
 
 // Locations queries the locations endpoint. No API key is added.
 func (c *Client) Locations(ctx context.Context, params map[string]string) (json.RawMessage, error) {
-	body, err := c.doGet(ctx, "/locations.json", params)
+	body, err := c.getJSON(ctx, "/locations.json", params)
 	if err != nil {
 		return nil, err
 	}
-	// Locations returns a JSON array; check for an error object.
-	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '{' {
-		if err := checkAPIError(body); err != nil {
-			return nil, err
-		}
+	if trimmed := bytes.TrimSpace(body); trimmed[0] != '[' {
 		return nil, &clierrors.APIError{Message: "Unexpected response from locations endpoint"}
 	}
-	return json.RawMessage(body), nil
+	return body, nil
 }
 
-// Archive retrieves a previously cached search result by ID.
+// Archive retrieves a previous search by ID.
 func (c *Client) Archive(ctx context.Context, id string) (json.RawMessage, error) {
-	params := map[string]string{"api_key": c.apiKey}
+	return c.getObject(ctx, archivePath(id), map[string]string{"api_key": c.apiKey})
+}
 
-	body, err := c.doGet(ctx, "/searches/"+id+".json", params)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkAPIError(body); err != nil {
-		return nil, err
-	}
-	return json.RawMessage(body), nil
+// ArchiveRaw retrieves a previous search in another output format (for
+// example md) and returns the body verbatim.
+func (c *Client) ArchiveRaw(ctx context.Context, id, output string) ([]byte, error) {
+	return c.getRaw(ctx, archivePath(id), map[string]string{"api_key": c.apiKey, "output": output})
+}
+
+func archivePath(id string) string {
+	return "/searches/" + url.PathEscape(id) + ".json"
 }
