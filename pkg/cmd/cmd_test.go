@@ -253,6 +253,22 @@ func TestAPIKeyPrecedence(t *testing.T) {
 	}
 }
 
+func TestFieldsSendsRestrictorAndWarnsWhenNothingMatches(t *testing.T) {
+	reqs := fakeAPI(t, respond(`{}`))
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--fields", "organic_results[0:3].{title, link}")
+
+	wantWarnings(t, wantOK(t, res),
+		"json_restrictor matched nothing or is malformed; compare its paths with the unfiltered response")
+	if res.stdout != "{}\n" {
+		t.Errorf("stdout = %q, want {}", res.stdout)
+	}
+	wantQuery(t, reqs.only(t), "/search.json", map[string]string{
+		"json_restrictor": "organic_results[0:3].{title, link},error",
+	})
+}
+
 func TestJQPrintsStringsRawAndKeepsNumbers(t *testing.T) {
 	fakeAPI(t, respond(`{"organic_results":[{"link":"https://a.example/?x=1&y=<2>"},{"link":"https://b.example"}],`+
 		`"search_information":{"total_results":12345678901234567890}}`))
@@ -285,6 +301,162 @@ func page(n int, hasNext bool) string {
 func pageNumber(r *http.Request) int {
 	start, _ := strconv.Atoi(r.URL.Query().Get("start"))
 	return start/10 + 1
+}
+
+func organicResults(t *testing.T, stdout string) []any {
+	t.Helper()
+	var merged map[string]any
+	if err := json.Unmarshal([]byte(stdout), &merged); err != nil {
+		t.Fatalf("stdout is not one JSON object: %v: %q", err, stdout)
+	}
+	if _, ok := merged["serpapi_pagination"]; ok {
+		t.Errorf("merged result keeps serpapi_pagination")
+	}
+	results, _ := merged["organic_results"].([]any)
+	return results
+}
+
+func TestAllPagesMergesPagesAndCarriesParams(t *testing.T) {
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		n := pageNumber(r)
+		fmt.Fprint(w, page(n, n < 3))
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "no_cache=true",
+		"--fields", "organic_results", "--all-pages")
+
+	wantWarnings(t, wantOK(t, res))
+	if got := organicResults(t, res.stdout); len(got) != 3 {
+		t.Errorf("merged %d results, want 3", len(got))
+	}
+	urls := reqs.list()
+	if len(urls) != 3 {
+		t.Fatalf("got %d requests, want 3", len(urls))
+	}
+	for i, u := range urls {
+		start := ""
+		if i > 0 {
+			start = strconv.Itoa(i * 10)
+		}
+		wantQuery(t, u, "/search.json", map[string]string{
+			"engine": "google", "q": "coffee", "start": start, "no_cache": "true", "api_key": "envkey",
+			"json_restrictor": "organic_results,error,serpapi_pagination.next",
+		})
+	}
+}
+
+func TestAllPagesStopsAtMaxPages(t *testing.T) {
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, page(pageNumber(r), true))
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--all-pages")
+	wantWarnings(t, wantOK(t, res),
+		"Stopped at 100 pages, but more exist; raise --max-pages to fetch them (one search each)")
+	if got := len(reqs.list()); got != 100 {
+		t.Errorf("default cap made %d requests, want 100", got)
+	}
+
+	res = execute(t, "", "search", "engine=google", "q=coffee", "--all-pages", "--max-pages", "2")
+	wantWarnings(t, wantOK(t, res))
+	if got := len(organicResults(t, res.stdout)); got != 2 {
+		t.Errorf("merged %d results, want 2", got)
+	}
+	if got := len(reqs.list()); got != 102 {
+		t.Errorf("--max-pages 2 made %d requests, want 2", got-100)
+	}
+}
+
+func TestAllPagesStopsWhenNextPageRepeats(t *testing.T) {
+	reqs := fakeAPI(t, respond(page(1, true)))
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--all-pages")
+
+	wantWarnings(t, wantOK(t, res), "Stopped after page 2: the next page repeats an earlier one")
+	if got := len(reqs.list()); got != 2 {
+		t.Errorf("got %d requests, want 2", got)
+	}
+}
+
+func TestAllPagesTreatsNoResultsAsTheEnd(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if pageNumber(r) == 2 {
+			fmt.Fprint(w, `{"error":"Google hasn't returned any results for this query."}`)
+			return
+		}
+		fmt.Fprint(w, page(1, true))
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--all-pages")
+
+	wantWarnings(t, wantOK(t, res), "Stopped after page 1: Google hasn't returned any results for this query.")
+	if got := len(organicResults(t, res.stdout)); got != 1 {
+		t.Errorf("merged %d results, want 1", got)
+	}
+}
+
+func TestAllPagesPrintsEarlierPagesWhenALaterOneFails(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if pageNumber(r) == 3 {
+			respondStatus(429, `{"error":"Your account has run out of searches."}`)(w, r)
+			return
+		}
+		fmt.Fprint(w, page(pageNumber(r), true))
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--all-pages")
+
+	errObj := wantError(t, res, 1, "api_error",
+		"Your account has run out of searches. (page 3 failed; pages 1-2 were printed)")
+	if errObj["status"] != float64(429) {
+		t.Errorf("status = %v, want 429", errObj["status"])
+	}
+	if got := len(organicResults(t, res.stdout)); got != 2 {
+		t.Errorf("merged %d results, want 2", got)
+	}
+}
+
+func TestAllPagesStopsWhenFieldsMatchNothing(t *testing.T) {
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=%d"}}`, pageNumber(r)*10)
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--fields", "organic_result", "--all-pages")
+
+	wantWarnings(t, wantOK(t, res),
+		"json_restrictor matched nothing or is malformed; compare its paths with the unfiltered response")
+	if res.stdout != "{}\n" {
+		t.Errorf("stdout = %q, want {}", res.stdout)
+	}
+	reqs.only(t)
+}
+
+func TestAllPagesStopsAtAPageFieldsMatchNothingOn(t *testing.T) {
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if n := pageNumber(r); n != 2 {
+			fmt.Fprint(w, page(n, true))
+			return
+		}
+		fmt.Fprint(w, `{"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=20"}}`)
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee", "--fields", "organic_results", "--all-pages")
+
+	wantWarnings(t, wantOK(t, res),
+		"Stopped after page 2: nothing on it matched json_restrictor; to fetch later pages anyway, filter with --jq instead of --fields")
+	if got := len(organicResults(t, res.stdout)); got != 1 {
+		t.Errorf("merged %d results, want 1", got)
+	}
+	if got := len(reqs.list()); got != 2 {
+		t.Errorf("got %d requests, want 2", got)
+	}
 }
 
 func TestMaxPagesWithoutAllPagesWarns(t *testing.T) {

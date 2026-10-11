@@ -64,6 +64,7 @@ func edgeCases() []edgeCase {
 	invalidKey := `{"error":"Invalid API key. Your API key should be here: https://serpapi.com/manage-api-key"}`
 	pages := func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page(pageNumber(r), pageNumber(r) < 3)) }
 	return []edgeCase{
+		{name: "argv/no parameters", args: []string{"search"}, exit: 2, code: "usage_error", msg: "No search parameters given"},
 		{name: "argv/q and bare words", args: searchWith("tea"), exit: 2, code: "usage_error", msg: "Got both q=... and bare words"},
 		{name: "argv/api_key parameter", args: searchWith("api_key=" + strayKey), exit: 2, code: "usage_error", msg: "not as the api_key parameter"},
 		{name: "argv/dash word after --", args: []string{"search", "engine=google", "--", "coffee", "-starbucks"}, api: oneResult,
@@ -100,6 +101,8 @@ func edgeCases() []edgeCase {
 		{name: "flags/SERPAPI_TIMEOUT not a number", args: search, env: map[string]string{"SERPAPI_TIMEOUT": "abc"}, exit: 2, code: "usage_error",
 			msg: `Invalid SERPAPI_TIMEOUT value "abc"`},
 		{name: "flags/--timeout wins over SERPAPI_TIMEOUT", args: searchWith("--timeout", "30"), env: map[string]string{"SERPAPI_TIMEOUT": "abc"}, api: oneResult},
+		{name: "flags/max-pages zero", args: searchWith("--all-pages", "--max-pages", "0"), exit: 2, code: "usage_error", msg: "--max-pages must be at least 1"},
+		{name: "flags/all-pages with async", args: searchWith("async=true", "--all-pages"), exit: 2, code: "usage_error", msg: "drop async=true"},
 		{name: "flags/fields outside search", args: []string{"account", "--fields", "plan_name"}, exit: 2, code: "usage_error", msg: "--fields works only with search"},
 		{name: "flags/fields on locations", args: []string{"locations", "q=Austin", "--fields", "name"}, exit: 2, code: "usage_error", msg: "--fields works only with search"},
 		{name: "flags/jq parse error", args: []string{"search", "--jq", ".[", "engine=google", "q=coffee"}, exit: 2, code: "usage_error", msg: "jq parse error"},
@@ -146,6 +149,15 @@ func edgeCases() []edgeCase {
 		{name: "response/SERPAPI_TIMEOUT applies", args: []string{"account"}, env: map[string]string{"SERPAPI_TIMEOUT": "0.05"}, api: hang, exit: 1,
 			code: "network_error", msg: "Request to /account.json timed out after 50ms. Slow engines, such as google_ai_mode"},
 
+		{name: "paging/foreign next host and key", args: searchWith("--all-pages"), api: func(w http.ResponseWriter, r *http.Request) {
+			if pageNumber(r) == 1 {
+				fmt.Fprint(w, `{"organic_results":[1],"serpapi_pagination":{"next":"https://evil.example/search.json?engine=google&q=coffee&start=10&api_key=stolen"}}`)
+				return
+			}
+			fmt.Fprint(w, `{"organic_results":[2]}`)
+		}, reqs: 2, stdout: "{\n  \"organic_results\": [\n    1,\n    2\n  ]\n}\n", query: map[string]string{"api_key": "envkey"}},
+		{name: "paging/invalid next URL", args: searchWith("--all-pages"), api: respond(`{"organic_results":[1],"serpapi_pagination":{"next":"http://[::1"}}`),
+			exit: 1, code: "api_error", msg: "Invalid pagination URL in response: http://[::1 (page 2 failed; page 1 was printed)", stdout: "{\n  \"organic_results\": [\n    1\n  ]\n}\n"},
 		{name: "paging/jq runs on the merged pages", args: searchWith("--all-pages", "--jq", ".organic_results | length"), api: pages, reqs: 3, stdout: "3\n"},
 
 		{name: "output/small result is quiet", args: search, api: oneResult, quiet: true},
@@ -313,6 +325,35 @@ func TestEndlessJQOutputStopsWhenStdoutFails(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("endless jq output kept running after stdout failed")
+	}
+}
+
+func TestInterruptDuringAllPagesPrintsFetchedPages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reached := make(chan struct{})
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if n := pageNumber(r); n < 3 {
+			fmt.Fprint(w, page(n, true))
+			return
+		}
+		close(reached)
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+	go func() {
+		<-reached
+		cancel()
+	}()
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while fetching page 3; pages 1-2 were printed")
+	if got := len(organicResults(t, res.stdout)); got != 2 {
+		t.Errorf("printed %d results, want the 2 fetched pages", got)
+	}
+	if got := len(reqs.list()); got != 3 {
+		t.Errorf("got %d requests, want 3", got)
 	}
 }
 
