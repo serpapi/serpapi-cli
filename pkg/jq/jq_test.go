@@ -1,7 +1,11 @@
 package jq
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestApplyIdentity(t *testing.T) {
@@ -66,5 +70,85 @@ func TestApplyInvalidExpression(t *testing.T) {
 	_, err := Apply("invalid[[[", input)
 	if err == nil {
 		t.Fatal("expected error for invalid expression")
+	}
+}
+
+func TestApplyHaltStopsWithoutError(t *testing.T) {
+	results, err := Apply("1, halt, 2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0] != 1 {
+		t.Errorf("results = %v, want [1]", results)
+	}
+}
+
+func TestApplyHaltErrorFails(t *testing.T) {
+	if _, err := Apply(`"boom" | halt_error`, nil); err == nil {
+		t.Error("halt_error should be an error")
+	}
+}
+
+func TestCompileReportsParseAndCompileErrors(t *testing.T) {
+	if _, err := Compile(".organic_results[].title"); err != nil {
+		t.Fatalf("valid expression: %v", err)
+	}
+	if _, err := Compile(".["); err == nil || !strings.Contains(err.Error(), "jq parse error") {
+		t.Errorf("want parse error, got %v", err)
+	}
+	if _, err := Compile("nosuchfn(1)"); err == nil || !strings.Contains(err.Error(), "jq compile error") {
+		t.Errorf("want compile error, got %v", err)
+	}
+}
+
+func TestRunEmitsEachResultBeforeAnError(t *testing.T) {
+	code, err := Compile(`.[] | . + 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []any
+	err = Run(context.Background(), code, []any{1, 2, "x"}, func(v any) error {
+		got = append(got, v)
+		return nil
+	})
+	if len(got) != 2 || err == nil || !strings.Contains(err.Error(), "cannot add") {
+		t.Errorf("got %v, %v; want [2 3] then a runtime error", got, err)
+	}
+}
+
+func TestRunStopsEndlessOutputWhenEmitFails(t *testing.T) {
+	code, err := Compile(`repeat(1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("stop")
+	n := 0
+	err = Run(context.Background(), code, nil, func(any) error {
+		if n++; n == 1000 {
+			return stop
+		}
+		return nil
+	})
+	if err != stop || n != 1000 {
+		t.Errorf("Run returned %v after %d results; want the emit error after 1000", err, n)
+	}
+}
+
+// A filter that computes without printing, such as a large reduce, must
+// still stop on Ctrl-C.
+func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
+	code, err := Compile(`reduce range(1e12) as $i (0; . + 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = Run(ctx, code, nil, func(any) error { return nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Run returned %v, want the context's error", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("Run took %s to notice the canceled context", took)
 	}
 }
