@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +27,12 @@ var (
 
 const defaultMaxPages = 100
 
+// SerpApi rejects any other output value, but only after the search has run.
+var (
+	jsonOutputs = map[string]bool{"json": true, "json_with_images": true, "json_with_pixel_position": true}
+	rawOutputs  = map[string]bool{"md": true, "html": true, "raw_html": true, "rawhtml": true, "plain": true, "csv": true}
+)
+
 // carriedParams are dropped from serpapi_pagination.next but still apply to
 // every page.
 var carriedParams = []string{"json_restrictor", "no_cache", "zero_trace", "output"}
@@ -33,7 +41,8 @@ var searchCmd = &cobra.Command{
 	Use:   "search PARAMS...",
 	Short: "Run a search with any SerpApi engine",
 	Long: `Run a search. Parameters are key=value pairs, starting with engine=.
-Words without "=" are joined into q. Some engines name the query differently:
+Words without "=" are joined into q. A parameter given twice keeps its last
+value, with a warning. Some engines name the query differently:
 youtube search_query, amazon k, ebay _nkw, walmart and naver query, yahoo p,
 yandex text. Parameters of every engine: https://serpapi.com/search-engine-apis
 
@@ -48,12 +57,17 @@ cache key, so a different --fields can miss the cache and count as a new
 search; --jq filters the response locally without changing the request.
 
 Responses are often 20-300 KB, and one key can be large too: Maps
-place_results holds reviews and photos. To see the shape of an unfamiliar
-response, print a sample with one item per array; nested arrays are cut too,
-so it is not the answer:
+place_results holds reviews and photos. Piped without --jq, a result over
+16 KB comes with a warning on stderr that lists its top-level keys by size,
+unless stderr goes into the same pipe (2>&1), where it would break a JSON
+parser. To see the shape of an unfamiliar response, print a sample with one
+item per array; nested arrays are cut too, so it is not the answer:
   --jq 'walk(if type == "array" then .[:1] else . end)'
 Then take what you need from the stored search, which is free:
   serpapi archive SEARCH_METADATA_ID --jq '.place_results | {title, rating, reviews}'
+
+output=md returns Markdown; html, plain and csv are also available. These are
+not JSON, so --jq and --all-pages do not apply.
 
 --all-pages follows serpapi_pagination.next and merges the arrays of every page
 into one JSON object, up to --max-pages pages, one search each. It stops at a
@@ -67,6 +81,7 @@ with 'serpapi archive ID'.`,
   serpapi search engine=google coffee shops --fields "organic_results[].{title, link}"
   serpapi search engine=youtube search_query="lofi beats" --jq ".video_results[:3][].link"
   serpapi search engine=google_maps q=pizza ll="@40.7455096,-74.0083012,14z" --fields "local_results[0:5]"
+  serpapi search engine=google q=coffee output=md
   serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq ".organic_results | length"`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runSearch,
@@ -86,11 +101,24 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	warnRepeated(cmd, parsed)
 	p := params.ParamsToMap(parsed)
 
 	maxPagesSet := cmd.Flags().Changed("max-pages")
 	if maxPagesSet && maxPagesFlag < 1 {
 		return &clierrors.UsageError{Message: "--max-pages must be at least 1"}
+	}
+	raw := false
+	if o, ok := p["output"]; ok {
+		if raw, err = isRawOutput(o); err != nil {
+			return err
+		}
+	}
+	if raw && jqFlag != "" {
+		return &clierrors.UsageError{Message: "--jq needs JSON, but output=" + p["output"] + " is not JSON"}
+	}
+	if raw && allPagesFlag {
+		return &clierrors.UsageError{Message: "--all-pages needs JSON, but output=" + p["output"] + " is not JSON"}
 	}
 	if a := p["async"]; allPagesFlag && a != "" && a != "false" && a != "0" {
 		return &clierrors.UsageError{Message: "--all-pages cannot follow an async search; drop async=" + a}
@@ -112,11 +140,22 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if keyErr != config.ErrNoAPIKey && errors.As(keyErr, &cfgErr) {
 		warn(cmd, "%s; searching without a key", cfgErr.Message)
 	}
-	return sendSearch(cmd, newClient(apiKey), p, restrictor != "")
+	err = sendSearch(cmd, newClient(apiKey), p, raw, restrictor != "")
+	if apiKey == "" {
+		err = explainMissingKey(err)
+	}
+	return err
 }
 
-func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, restricted bool) error {
+func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, raw, restricted bool) error {
 	ctx := cmd.Context()
+	if raw {
+		body, err := withSpinner("Searching...", func() ([]byte, error) { return client.SearchRaw(ctx, p) })
+		if err != nil {
+			return err
+		}
+		return outputError(output.PrintRaw(cmd.OutOrStdout(), body))
+	}
 	if allPagesFlag {
 		return searchAllPages(cmd, client, p, restricted)
 	}
@@ -128,7 +167,36 @@ func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, res
 	if restricted && isEmptyObject(result) {
 		warnNothingMatched(cmd)
 	}
-	return handleOutput(cmd, result)
+	return handleOutput(cmd, result, searchHint)
+}
+
+// explainMissingKey adds to a 401 for a search sent without a key how to give
+// one, keeping the API's message, type and status.
+func explainMissingKey(err error) error {
+	var apiErr *clierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+		return err
+	}
+	return &clierrors.APIError{
+		Message: apiErr.Message + " (no API key found; pass --api-key, set SERPAPI_KEY or run 'serpapi login')",
+		Status:  apiErr.Status,
+		Cause:   apiErr.Cause,
+	}
+}
+
+func isRawOutput(o string) (bool, error) {
+	// The API lowercases output, so MD works like md.
+	switch lower := strings.ToLower(o); {
+	case jsonOutputs[lower]:
+		return false, nil
+	case rawOutputs[lower]:
+		return true, nil
+	case strings.HasPrefix(lower, "rank:") && len(lower) > len("rank:"),
+		strings.HasPrefix(lower, "ad_rank:") && len(lower) > len("ad_rank:"):
+		return true, nil
+	}
+	return false, &clierrors.UsageError{Message: "Unknown output=" + o +
+		"; use json, json_with_images, json_with_pixel_position, md, html, raw_html, plain, csv, rank:DOMAIN or ad_rank:DOMAIN"}
 }
 
 func isEmptyObject(raw []byte) bool {
@@ -259,6 +327,14 @@ func printMerged(cmd *cobra.Command, merged map[string]any) error {
 		}
 		return outputError(output.PrintJSON(w, buf.Bytes()))
 	}
+	// Measuring takes an extra encoding pass, but holds no encoded copy.
+	var keys []keySize
+	size, err := output.WriteObject(io.Discard, merged, func(k string, n int) { keys = append(keys, keySize{k, n}) })
+	if err != nil {
+		return &clierrors.APIError{Message: "Failed to encode result: " + err.Error()}
+	}
+	sortKeySizes(keys)
+	hintLargeResult(cmd, int(size), keys, searchHint(""))
 	bw := bufio.NewWriterSize(w, 64<<10)
 	if _, err := output.WriteObject(bw, merged, nil); err != nil {
 		return outputError(err)

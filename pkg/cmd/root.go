@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -64,6 +66,7 @@ characters from results escaped, so a page cannot drive it; piped output keeps
 them. Keep results small:
   --fields "organic_results[].{title, link}"   server-side filter (search only)
   --jq ".organic_results[].link"                jq filter; strings print unquoted
+  output=md                                     Markdown instead of JSON
 
 Errors and warnings go to stderr as one JSON object per line:
   {"error":{"code":"api_error","message":"Invalid API key. ...","status":401}}
@@ -88,6 +91,7 @@ hour old, so add it only when that is too old. account, locations and archive
 are free.`,
 	Example: `  serpapi search engine=google q=coffee --fields "organic_results[0:3]"
   serpapi search engine=google coffee shops --jq ".organic_results[].link"
+  serpapi search engine=google q=coffee output=md
   serpapi locations q=Austin limit=3
   serpapi account --jq .total_searches_left`,
 	Version:       version.Version,
@@ -165,9 +169,34 @@ func init() {
 	rootCmd.PersistentPreRunE = validateGlobalFlags
 
 	// Wrap cobra flag-parsing errors as UsageError so they get exit code 2.
-	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
-		return &clierrors.UsageError{Message: err.Error()}
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return &clierrors.UsageError{Message: flagErrorHint(cmd, err.Error())}
 	})
+}
+
+// flagErrorHint explains the two flag errors agents hit most: a search word
+// starting with "-", such as -site:example.com, and an API parameter guessed
+// as a flag, such as --num 10.
+func flagErrorHint(cmd *cobra.Command, msg string) string {
+	if cmd != searchCmd && cmd != locationsCmd {
+		return msg
+	}
+	params := "API parameters are key=value pairs, e.g. engine=google q=coffee"
+	if cmd == locationsCmd {
+		params = "API parameters are key=value pairs, e.g. q=Austin limit=3"
+	}
+	if strings.HasPrefix(msg, "unknown shorthand flag") {
+		// pflag reports "unknown shorthand flag: 'e' in -e". A one-letter flag
+		// is a guessed parameter; a longer one may be a word like -site:x.com.
+		if _, arg, _ := strings.Cut(msg, " in "); len(arg) == 2 {
+			return msg + "; " + params
+		}
+		return msg + `; to search for a word starting with "-", put it inside q="..." or after --; ` + params
+	}
+	if name, ok := strings.CutPrefix(msg, "unknown flag: --"); ok {
+		return msg + "; API parameters are key=value pairs, e.g. " + name + "=VALUE"
+	}
+	return msg
 }
 
 // validateGlobalFlags rejects bad flags before any request, so a typo never
@@ -269,9 +298,16 @@ func noArgs(hint string) cobra.PositionalArgs {
 }
 
 // handleOutput applies --jq, if set, and prints the JSON result to stdout.
-func handleOutput(cmd *cobra.Command, raw []byte) error {
+// next, if not nil, gives the large-result hint its next step.
+func handleOutput(cmd *cobra.Command, raw []byte, next func(id string) string) error {
 	if jqFlag == "" {
-		return outputError(output.PrintJSON(cmd.OutOrStdout(), raw))
+		w := cmd.OutOrStdout()
+		out := output.FormatJSON(w, raw)
+		if next != nil {
+			hintLargeJSON(cmd, out, next)
+		}
+		_, err := w.Write(out)
+		return outputError(err)
 	}
 	var v any
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -282,7 +318,8 @@ func handleOutput(cmd *cobra.Command, raw []byte) error {
 	return printJQ(cmd, v)
 }
 
-// printJQ runs --jq on v and prints each result as it is produced.
+// printJQ runs --jq on v and prints each result as it is produced. A filter
+// that prints only null gets a warning listing the keys v has.
 func printJQ(cmd *cobra.Command, v any) error {
 	code, err := jq.Compile(jqFlag)
 	if err != nil {
@@ -292,11 +329,16 @@ func printJQ(cmd *cobra.Command, v any) error {
 	tty := output.IsTerminal(w)
 	bw := bufio.NewWriter(w)
 	var writeErr error
+	printed, nulls := 0, 0
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	err = jq.Run(ctx, code, v, func(val any) error {
+		printed++
+		if val == nil {
+			nulls++
+		}
 		writeErr = output.PrintJQValue(val, bw, tty)
 		return writeErr
 	})
@@ -310,9 +352,31 @@ func printJQ(cmd *cobra.Command, v any) error {
 		return &clierrors.InterruptedError{Message: "Stopped while running --jq; what it printed before the signal is on stdout"}
 	}
 	if err != nil {
-		return &clierrors.UsageError{Message: err.Error()}
+		return &clierrors.UsageError{Message: jqErrorHint(err.Error(), v)}
+	}
+	if keys := objectKeys(v); printed > 0 && nulls == printed && keys != "" {
+		warn(cmd, "--jq printed only null; check the path against the response's top-level keys: %s", keys)
 	}
 	return nil
+}
+
+// jqErrorHint adds the fix for the jq errors agents hit most: a value of
+// another type than the filter expects, and a path missing from this
+// response, for which it lists the keys the response does have.
+func jqErrorHint(msg string, v any) string {
+	if strings.Contains(msg, "expected an object but got") {
+		return msg + "; add ? to skip values of another type, e.g. .source.name? // .source"
+	}
+	if !strings.Contains(msg, ": null") {
+		return msg
+	}
+	if strings.Contains(msg, "cannot iterate over: null") {
+		msg += "; use []? to skip a missing array, e.g. .organic_results[]?"
+	}
+	if obj, ok := v.(map[string]any); ok && len(obj) > 0 {
+		msg += "; the response has: " + strings.Join(slices.Sorted(maps.Keys(obj)), ", ")
+	}
+	return msg
 }
 
 func outputError(err error) error {

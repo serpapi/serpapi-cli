@@ -487,6 +487,42 @@ func TestAccountMasksAPIKey(t *testing.T) {
 	}
 }
 
+func TestArchiveOutputFormats(t *testing.T) {
+	reqs := fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("output") {
+		case "md":
+			fmt.Fprint(w, "# Coffee")
+		case "rank:example.com":
+			fmt.Fprint(w, "3")
+		default:
+			fmt.Fprint(w, `{"search_metadata":{"id":"abc_123-X"},"organic_results":[{"link":"https://example.com"}]}`)
+		}
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	tests := []struct {
+		args           []string
+		output, stdout string
+	}{
+		{nil, "", "{\n  \"search_metadata\": {\n    \"id\": \"abc_123-X\"\n  },\n  \"organic_results\": [\n    {\n      \"link\": \"https://example.com\"\n    }\n  ]\n}\n"},
+		{[]string{"output=md"}, "md", "# Coffee\n"},
+		{[]string{"output=rank:example.com"}, "rank:example.com", "3\n"},
+		{[]string{"output=json_with_images", "--jq", ".organic_results[0].link"}, "json_with_images", "https://example.com\n"},
+	}
+	for i, tt := range tests {
+		res := execute(t, "", append([]string{"archive", "abc_123-X"}, tt.args...)...)
+		wantOK(t, res)
+		if res.stdout != tt.stdout {
+			t.Errorf("%v: stdout = %q, want %q", tt.args, res.stdout, tt.stdout)
+		}
+		urls := reqs.list()
+		if len(urls) != i+1 {
+			t.Fatalf("%v: got %d requests in total, want %d", tt.args, len(urls), i+1)
+		}
+		wantQuery(t, urls[i], "/searches/abc_123-X.json", map[string]string{"output": tt.output, "api_key": "envkey"})
+	}
+}
+
 func TestLocationsSendsNoAPIKey(t *testing.T) {
 	reqs := fakeAPI(t, respond(`[{"canonical_name":"Austin,TX,Texas,United States"}]`))
 	t.Setenv("SERPAPI_KEY", "envkey")

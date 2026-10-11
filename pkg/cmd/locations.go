@@ -30,6 +30,7 @@ func runLocations(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	warnRepeated(cmd, parsed)
 	p := params.ParamsToMap(parsed)
 	if blank(p["q"]) && blank(p["location"]) && blank(p["limit"]) {
 		return &clierrors.UsageError{Message: "Pass a location query, e.g. serpapi locations q=Austin limit=5; without one the server returns every location (66 MB)"}
@@ -41,7 +42,7 @@ func runLocations(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return handleOutput(cmd, result)
+	return handleOutput(cmd, result, nil)
 }
 
 func blank(s string) bool { return strings.TrimSpace(s) == "" }

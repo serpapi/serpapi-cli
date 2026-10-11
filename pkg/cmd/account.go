@@ -34,7 +34,7 @@ func runAccount(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	return handleOutput(cmd, maskAPIKey(result))
+	return handleOutput(cmd, maskAPIKey(result), nil)
 }
 
 var reAPIKey = regexp.MustCompile(`("api_key"\s*:\s*)("(?:[^"\\]|\\.)*")`)
