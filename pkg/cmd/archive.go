@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"regexp"
 
 	"github.com/spf13/cobra"
@@ -11,10 +12,15 @@ import (
 var reArchiveID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 var archiveCmd = &cobra.Command{
-	Use:   "archive <id>",
-	Short: "Retrieve a previously cached search by ID",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runArchive,
+	Use:   "archive ID",
+	Short: "Fetch an earlier search by its search_metadata.id (free)",
+	Long: `Fetch an earlier search by the ID in its search_metadata.id. This request is
+free, and it is how you collect the results of a search made with async=true:
+until search_metadata.status is Success it is Queued or Processing, so poll.`,
+	Example: `  serpapi archive 6a2b3c4d5e6f7a8b9c0d1e2f
+  serpapi archive 6a2b3c4d5e6f7a8b9c0d1e2f --jq ".organic_results[0]"`,
+	Args: cobra.ExactArgs(1),
+	RunE: runArchive,
 }
 
 func init() {
@@ -31,19 +37,10 @@ func runArchive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
-	client, err := newClient(apiKey)
+	client := newClient(apiKey)
+	result, err := withSpinner("Fetching archive...", func() (json.RawMessage, error) { return client.Archive(cmd.Context(), id) })
 	if err != nil {
 		return err
 	}
-
-	sp := newSpinner("Fetching archive...")
-	sp.Start()
-	defer sp.Stop()
-	result, err := client.Archive(cmd.Context(), id)
-	if err != nil {
-		return err
-	}
-
-	return handleOutput(result)
+	return handleOutput(cmd, result)
 }

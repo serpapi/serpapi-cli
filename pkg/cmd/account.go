@@ -9,53 +9,54 @@ import (
 
 var accountCmd = &cobra.Command{
 	Use:   "account",
-	Short: "Retrieve account information and usage statistics",
-	Args:  cobra.NoArgs,
-	RunE:  runAccount,
+	Short: "Show plan, usage and searches left (free)",
+	Long: `Show the account's plan, usage this month and hour, and searches left.
+This request is free. The API key in the output is masked.`,
+	Example: `  serpapi account --jq .total_searches_left
+  serpapi account --jq "{plan_name, total_searches_left, account_rate_limit_per_hour}"`,
+	Args: noArgs("pass the key with SERPAPI_KEY or --api-key"),
+	RunE: runAccount,
 }
 
 func init() {
 	rootCmd.AddCommand(accountCmd)
 }
 
-func runAccount(cmd *cobra.Command, args []string) error {
+func runAccount(cmd *cobra.Command, _ []string) error {
 	apiKey, err := resolveAPIKey()
 	if err != nil {
 		return err
 	}
-
-	client, err := newClient(apiKey)
+	client := newClient(apiKey)
+	result, err := withSpinner("Fetching account...", func() (json.RawMessage, error) {
+		return client.Account(cmd.Context())
+	})
 	if err != nil {
 		return err
 	}
-
-	sp := newSpinner("Fetching account...")
-	sp.Start()
-	defer sp.Stop()
-	result, err := client.Account(cmd.Context())
-	if err != nil {
-		return err
-	}
-
-	return handleOutput(maskAPIKey(result))
+	return handleOutput(cmd, maskAPIKey(result))
 }
 
-var reAPIKey = regexp.MustCompile(`("api_key"\s*:\s*")([^"]{9,})(")`)
+var reAPIKey = regexp.MustCompile(`("api_key"\s*:\s*)("(?:[^"\\]|\\.)*")`)
 
-// maskAPIKey replaces the api_key value in raw JSON with a masked version (first 4 + last 4).
-// Operates on raw bytes to preserve original field order.
+// maskAPIKey replaces the api_key value in raw JSON with its first and last
+// four characters. It edits the bytes in place to keep the field order, and
+// decodes the value so escapes and multi-byte characters are never cut.
 func maskAPIKey(raw json.RawMessage) json.RawMessage {
 	return reAPIKey.ReplaceAllFunc(raw, func(match []byte) []byte {
 		sub := reAPIKey.FindSubmatch(match)
-		if len(sub) < 4 {
+		var key string
+		if json.Unmarshal(sub[2], &key) != nil {
 			return match
 		}
-		key := string(sub[2])
-		masked := key[:4] + "…" + key[len(key)-4:]
-		var buf []byte
-		buf = append(buf, sub[1]...)
-		buf = append(buf, masked...)
-		buf = append(buf, sub[3]...)
-		return buf
+		r := []rune(key)
+		if len(r) < 9 {
+			return match
+		}
+		masked, err := json.Marshal(string(r[:4]) + "…" + string(r[len(r)-4:]))
+		if err != nil {
+			return match
+		}
+		return append(append([]byte{}, sub[1]...), masked...)
 	})
 }

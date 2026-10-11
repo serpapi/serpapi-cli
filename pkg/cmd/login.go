@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,92 +19,98 @@ import (
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Save API key to config file",
-	Args:  cobra.NoArgs,
-	RunE:  runLogin,
+	Short: "Check an API key and save it for later commands",
+	Long: `Check an API key with a free account request, then save it to the config
+file. The key comes from --api-key, a hidden prompt on a terminal, or else the
+first line of stdin, which login waits for. In scripts and agents, set
+SERPAPI_KEY instead; it takes precedence over the saved key. Get a key at
+https://serpapi.com/manage-api-key`,
+	Example: `  serpapi login
+  printf %s "$KEY" | serpapi login`,
+	Args: noArgs(`pipe the key instead: printf %s "$KEY" | serpapi login`),
+	RunE: runLogin,
 }
 
 func init() {
 	rootCmd.AddCommand(loginCmd)
 }
 
-func runLogin(cmd *cobra.Command, args []string) error {
-	// Check if already authenticated
-	if existingKey, err := config.LoadAPIKey(); err == nil && existingKey != "" {
-		client, err := newClient(existingKey)
-		if err != nil {
+func runLogin(cmd *cobra.Command, _ []string) error {
+	apiKey := strings.TrimSpace(apiKeyFlag)
+	if apiKey == "" {
+		key, err := readAPIKey(cmd)
+		if err != nil || key == "" {
 			return err
 		}
-		raw, err := client.Account(cmd.Context())
-		if err == nil {
-			var account struct {
-				AccountEmail  string `json:"account_email"`
-				AccountStatus string `json:"account_status"`
-			}
-			if json.Unmarshal(raw, &account) == nil && account.AccountEmail != "" {
-				fmt.Fprintf(os.Stderr, "Already logged in as %s (%s).\n", account.AccountEmail, account.AccountStatus)
-				if term.IsTerminal(int(os.Stdin.Fd())) {
-					fmt.Fprint(os.Stderr, "Re-authenticate with a different key? [y/N] ")
-					reader := bufio.NewReader(os.Stdin)
-					line, _ := reader.ReadString('\n')
-					if strings.TrimSpace(strings.ToLower(line)) != "y" {
-						return nil
-					}
-				} else {
-					// Non-interactive: exit non-zero so CI detects the no-op
-					return fmt.Errorf("already logged in as %s. Delete %s to re-authenticate", account.AccountEmail, config.Path())
-				}
-			}
-		}
-		// If API call failed (e.g. expired key), fall through to re-login
+		apiKey = key
 	}
 
-	var apiKey string
-
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Fprint(os.Stderr, "Enter your SerpApi API key: ")
-		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr) // newline after hidden input
-		if err != nil {
-			return &clierrors.UsageError{Message: "Failed to read input: " + err.Error()}
-		}
-		apiKey = string(raw)
-	} else {
-		fmt.Fprint(os.Stderr, "Enter your SerpApi API key: ")
-		reader := bufio.NewReader(os.Stdin)
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return &clierrors.UsageError{Message: "Failed to read input: " + err.Error()}
-		}
-		apiKey = line
-	}
-
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return &clierrors.UsageError{Message: "API key cannot be empty."}
-	}
-
-	client, err := newClient(apiKey)
+	email, err := accountEmail(cmd.Context(), apiKey)
 	if err != nil {
 		return err
 	}
-	raw, err := client.Account(cmd.Context())
-	if err != nil {
-		return err
-	}
-
-	email := "unknown"
-	var account struct {
-		AccountEmail string `json:"account_email"`
-	}
-	if json.Unmarshal(raw, &account) == nil && account.AccountEmail != "" {
-		email = account.AccountEmail
-	}
-
 	if err := config.SaveConfig(apiKey); err != nil {
 		return err
 	}
-
-	fmt.Fprintf(os.Stderr, "Logged in as %s. API key saved to %q\n", email, config.Path())
+	// Without a terminal, success is exit 0 and stderr carries only JSON lines.
+	if f, ok := cmd.ErrOrStderr().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprintf(f, "Logged in as %s. API key saved to %s\n", email, config.Path())
+	}
+	for _, name := range apiKeyEnvVars {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			warn(cmd, "%s is set and takes precedence over the saved key", name)
+			break
+		}
+	}
 	return nil
+}
+
+// readAPIKey prompts on a terminal and otherwise reads the first line of
+// stdin. It returns "" and no error when the user keeps the saved key.
+func readAPIKey(cmd *cobra.Command) (string, error) {
+	stderr := cmd.ErrOrStderr()
+	var key string
+	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if saved, err := config.LoadAPIKey(); err == nil && saved != "" {
+			if email, err := accountEmail(cmd.Context(), saved); err == nil {
+				fmt.Fprintf(stderr, "Already logged in as %s. Replace the saved key? [y/N] ", email)
+				line, _ := bufio.NewReader(f).ReadString('\n')
+				if !strings.EqualFold(strings.TrimSpace(line), "y") {
+					fmt.Fprintln(stderr, "Kept the saved key.")
+					return "", nil
+				}
+			}
+		}
+		fmt.Fprint(stderr, "SerpApi API key (input hidden): ")
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(stderr)
+		if err != nil {
+			return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
+		}
+		key = string(b)
+	} else {
+		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
+		}
+		key = line
+	}
+	if key = strings.TrimSpace(key); key == "" {
+		return "", &clierrors.UsageError{Message: `No API key given. Use: printf %s "$KEY" | serpapi login`}
+	}
+	return key, nil
+}
+
+func accountEmail(ctx context.Context, apiKey string) (string, error) {
+	raw, err := newClient(apiKey).Account(ctx)
+	if err != nil {
+		return "", err
+	}
+	var account struct {
+		AccountEmail string `json:"account_email"`
+	}
+	if json.Unmarshal(raw, &account) != nil || account.AccountEmail == "" {
+		return "unknown", nil
+	}
+	return account.AccountEmail, nil
 }

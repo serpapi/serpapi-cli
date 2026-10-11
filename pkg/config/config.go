@@ -36,7 +36,7 @@ func Path() string {
 
 // ErrNoAPIKey is returned by ResolveAPIKey when no source has a key.
 var ErrNoAPIKey = &clierrors.UsageError{
-	Message: "No API key found. Pass --api-key, set SERPAPI_KEY, or run 'serpapi login'. Get a key at https://serpapi.com/manage-api-key",
+	Message: "No API key found. Pass --api-key, set SERPAPI_KEY (or SERPAPI_API_KEY), or run 'serpapi login'. Get a key at https://serpapi.com/manage-api-key",
 }
 
 // LoadAPIKey returns the API key saved in the config file, or "" when there

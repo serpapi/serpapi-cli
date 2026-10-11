@@ -3,13 +3,14 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
 
+	"github.com/serpapi/serpapi-cli/pkg/config"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
 	"github.com/serpapi/serpapi-cli/pkg/params"
 )
@@ -48,30 +49,30 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	apiKey := resolveAPIKeyOptional()
 	paramsMap := params.ParamsToMap(parsed)
 	params.ApplyFields(paramsMap, fieldsFlag)
 
-	client, err := newClient(apiKey)
-	if err != nil {
-		return err
+	// Search runs without a key, as in v0.2: the API answers a few demo
+	// queries without one and returns 401 for the rest.
+	apiKey, keyErr := resolveAPIKey()
+	var cfgErr *clierrors.UsageError
+	if keyErr != config.ErrNoAPIKey && errors.As(keyErr, &cfgErr) {
+		warn(cmd, "%s; searching without a key", cfgErr.Message)
 	}
+	client := newClient(apiKey)
 
 	hasMaxPages := cmd.Flags().Changed("max-pages")
 
 	if hasMaxPages && !allPagesFlag {
-		fmt.Fprintln(os.Stderr, "Warning: --max-pages has no effect without --all-pages")
+		warn(cmd, "--max-pages has no effect without --all-pages")
 	}
 
 	if !allPagesFlag {
-		sp := newSpinner("Searching...")
-		sp.Start()
-		defer sp.Stop()
-		raw, err := client.Search(cmd.Context(), paramsMap)
+		raw, err := withSpinner("Searching...", func() (json.RawMessage, error) { return client.Search(cmd.Context(), paramsMap) })
 		if err != nil {
 			return err
 		}
-		return handleOutput(raw)
+		return handleOutput(cmd, raw)
 	}
 
 	// Pagination mode
@@ -92,10 +93,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	visitedPages[canonicalParamsKey(currentParams)] = true
 
 	for {
-		sp := newSpinner(fmt.Sprintf("Fetching page %d...", pagesFetched+1))
-		sp.Start()
-		raw, err := client.Search(cmd.Context(), currentParams)
-		sp.Stop()
+		raw, err := withSpinner(fmt.Sprintf("Fetching page %d...", pagesFetched+1), func() (json.RawMessage, error) {
+			return client.Search(cmd.Context(), currentParams)
+		})
 		if err != nil {
 			return err
 		}
@@ -149,7 +149,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err := enc.Encode(accumulated); err != nil {
 		return &clierrors.APIError{Message: "Failed to encode result: " + err.Error()}
 	}
-	return handleOutput(json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+	return handleOutput(cmd, json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
 }
 
 // withPaginationRestrictor adds the pagination field needed internally while
