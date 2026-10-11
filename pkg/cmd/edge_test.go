@@ -1,14 +1,17 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,4 +314,90 @@ func TestEndlessJQOutputStopsWhenStdoutFails(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("endless jq output kept running after stdout failed")
 	}
+}
+
+func TestInterruptBeforeTheResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(_ http.ResponseWriter, r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := executeContext(t, ctx, "", search...)
+
+	errObj := wantError(t, res, 130, "interrupted", "Stopped before the response arrived")
+	if _, ok := errObj["status"]; ok || res.stdout != "" {
+		t.Errorf("error %v, stdout %q; want no status and no output", errObj, res.stdout)
+	}
+}
+
+func TestInterruptDuringJQKeepsWhatItPrinted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"organic_results":[{"position":1}]}`)
+		time.AfterFunc(50*time.Millisecond, cancel)
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := executeContext(t, ctx, "", searchWith("--jq", ".organic_results[0].position, (reduce range(1e12) as $i (0; . + 1))")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
+	if res.stdout != "1\n" {
+		t.Errorf("stdout = %q, want the result printed before the signal", res.stdout)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer safe to write from another goroutine.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestExitAfterGrace(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = 20 * time.Millisecond
+	t.Cleanup(func() { interruptGrace = grace })
+
+	t.Run("a command stuck after the signal exits 130", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var stderr lockedBuffer
+		exited, stopped := make(chan int, 1), false
+		exitAfterGrace(ctx, make(chan struct{}), func() { stopped = true }, &stderr, func(code int) { exited <- code })
+
+		if code := <-exited; code != 130 || !stopped {
+			t.Errorf("exit(%d), stopped %v; want exit(130) after restoring the default handling", code, stopped)
+		}
+		if !strings.Contains(stderr.String(), `"code":"interrupted","message":"Stopped 20ms after the signal; the output may be cut off"`) {
+			t.Errorf("stderr = %q", stderr.String())
+		}
+	})
+	t.Run("a command that finishes in time is not cut off", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan struct{})
+		close(done)
+		exitAfterGrace(ctx, done, func() {}, io.Discard, func(code int) { t.Errorf("exit(%d) after the command finished", code) })
+	})
+	t.Run("no signal, no exit", func(t *testing.T) {
+		done := make(chan struct{})
+		close(done)
+		exitAfterGrace(context.Background(), done, func() { t.Error("stop called without a signal") }, io.Discard,
+			func(code int) { t.Errorf("exit(%d) without a signal", code) })
+	})
 }

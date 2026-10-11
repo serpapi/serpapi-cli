@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -72,6 +76,8 @@ limited or out of searches; 5xx SerpApi failed. No status means no usable
 answer: a network_error, such as a timeout, or an unreadable response.
 Requests time out after 60s: --timeout or SERPAPI_TIMEOUT sets seconds, 0
 waits indefinitely.
+Exit 130, code interrupted: stopped by Ctrl-C or SIGTERM, after printing what
+had arrived.
 
 Cost: each successful search counts against your monthly searches, including
 each page of --all-pages; cached, errored and failed ones don't, though errored
@@ -94,17 +100,54 @@ are free.`,
 	},
 }
 
-// Execute runs the root command and exits with the code run returns.
+// interruptGrace is how long a command may take to wrap up after the first
+// signal before the process exits anyway.
+var interruptGrace = 3 * time.Second
+
+// Execute runs the root command. The first Ctrl-C or SIGTERM cancels the
+// command's context so it can print what it has; a second one kills it.
 func Execute() {
-	os.Exit(run(context.Background()))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go exitAfterGrace(ctx, done, stop, rootCmd.ErrOrStderr(), os.Exit)
+	code := run(ctx)
+	close(done)
+	stop()
+	os.Exit(code)
+}
+
+// exitAfterGrace waits for the first signal, restores the default handling
+// so that a second one kills the process, and exits 130 if the command is
+// still running interruptGrace later, as it is when blocked on a full pipe.
+func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stderr io.Writer, exit func(int)) {
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	stop()
+	select {
+	case <-done:
+	case <-time.After(interruptGrace):
+		// stderr may be the full pipe, so the message gets a moment, not a promise.
+		go clierrors.FprintError(stderr, &clierrors.InterruptedError{
+			Message: fmt.Sprintf("Stopped %s after the signal; the output may be cut off", interruptGrace),
+		})
+		time.Sleep(100 * time.Millisecond)
+		exit(130)
+	}
 }
 
 // run executes the root command, reports any error on its stderr as JSON and
-// returns the exit code.
+// returns the exit code. A command stopped by canceling ctx exits 130.
 func run(ctx context.Context) int {
 	err := rootCmd.ExecuteContext(ctx)
 	if err == nil {
 		return 0
+	}
+	var interrupted *clierrors.InterruptedError
+	if ctx.Err() != nil && !errors.As(err, &interrupted) {
+		err = &clierrors.InterruptedError{Message: "Stopped before the response arrived"}
 	}
 	clierrors.FprintError(rootCmd.ErrOrStderr(), err)
 	return clierrors.ExitCode(err)
@@ -262,6 +305,9 @@ func printJQ(cmd *cobra.Command, v any) error {
 	}
 	if writeErr != nil {
 		return outputError(writeErr)
+	}
+	if err != nil && ctx.Err() != nil {
+		return &clierrors.InterruptedError{Message: "Stopped while running --jq; what it printed before the signal is on stdout"}
 	}
 	if err != nil {
 		return &clierrors.UsageError{Message: err.Error()}
