@@ -135,13 +135,13 @@ func handleOutput(raw json.RawMessage) error {
 			return &clierrors.UsageError{Message: err.Error()}
 		}
 		for _, val := range results {
-			if err := output.PrintJQValue(val, os.Stdout); err != nil {
+			if err := output.PrintJQValue(val, os.Stdout, output.IsTerminal(os.Stdout)); err != nil {
 				return &clierrors.APIError{Message: fmt.Sprintf("Output error: %s", err)}
 			}
 		}
 		return nil
 	}
-	if err := output.PrintJSON(raw); err != nil {
+	if err := output.PrintJSON(os.Stdout, raw); err != nil {
 		return &clierrors.APIError{Message: fmt.Sprintf("Output error: %s", err)}
 	}
 	return nil
