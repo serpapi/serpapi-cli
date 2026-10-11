@@ -80,7 +80,7 @@ func resolveAPIKeyOptional() string {
 	if key != "" {
 		return key
 	}
-	if k, ok := config.LoadAPIKey(); ok {
+	if k, err := config.LoadAPIKey(); err == nil && k != "" {
 		return k
 	}
 	return ""

@@ -28,7 +28,7 @@ func init() {
 
 func runLogin(cmd *cobra.Command, args []string) error {
 	// Check if already authenticated
-	if existingKey, ok := config.LoadAPIKey(); ok {
+	if existingKey, err := config.LoadAPIKey(); err == nil && existingKey != "" {
 		client, err := newClient(existingKey)
 		if err != nil {
 			return err
