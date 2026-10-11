@@ -13,12 +13,12 @@ import (
 
 // darkStyle matches stripe-cli's darkTerminalStyle exactly.
 var darkStyle = &pretty.Style{
-	Key:    [2]string{"\x1B[34m", "\x1B[0m"},   // blue
-	String: [2]string{"\x1B[32m", "\x1B[0m"},   // green
-	Number: [2]string{"\x1B[33m", "\x1B[0m"},   // yellow
-	True:   [2]string{"\x1B[35m", "\x1B[0m"},   // magenta
-	False:  [2]string{"\x1B[35m", "\x1B[0m"},   // magenta
-	Null:   [2]string{"\x1B[31m", "\x1B[0m"},   // red
+	Key:    [2]string{"\x1B[34m", "\x1B[0m"}, // blue
+	String: [2]string{"\x1B[32m", "\x1B[0m"}, // green
+	Number: [2]string{"\x1B[33m", "\x1B[0m"}, // yellow
+	True:   [2]string{"\x1B[35m", "\x1B[0m"}, // magenta
+	False:  [2]string{"\x1B[35m", "\x1B[0m"}, // magenta
+	Null:   [2]string{"\x1B[31m", "\x1B[0m"}, // red
 }
 
 // shouldColor returns true when stdout is a TTY and NO_COLOR is not set.
@@ -82,4 +82,3 @@ func formatNumber(f float64) string {
 	}
 	return fmt.Sprintf("%g", f)
 }
-

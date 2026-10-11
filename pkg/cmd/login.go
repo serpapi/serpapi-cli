@@ -106,4 +106,3 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Logged in as %s. API key saved to %q\n", email, config.Path())
 	return nil
 }
-
