@@ -38,11 +38,8 @@ jobs:
         with:
           go-version: stable
           check-latest: true
+      # Fork PRs get no secrets, so only the offline contract tests run there.
       - name: Run E2E tests
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-        run: go test ./tests/...
-      - name: Skip E2E (fork PR)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: echo "Skipping E2E tests - SERPAPI_KEY unavailable in fork PRs"
+        run: go test -v ./tests/...
