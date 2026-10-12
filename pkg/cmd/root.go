@@ -87,8 +87,9 @@ each page of --all-pages; cached, errored and failed ones don't, though errored
 ones count toward the hourly limit (https://serpapi.com/pricing). An identical
 search, --fields included, repeated within an hour comes from the cache.
 no_cache=true forces a new, counted search; cached results are at most an
-hour old, so add it only when that is too old. account, locations and archive
-are free.`,
+hour old, so add it only when that is too old. zero_trace=true (Enterprise)
+stores nothing, so it skips the cache too and leaves no search for archive to
+read. account, locations and archive are free.`,
 	Example: `  serpapi search engine=google q=coffee --fields "organic_results[0:3]"
   serpapi search engine=google coffee shops --jq ".organic_results[].link"
   serpapi search engine=google q=coffee output=md

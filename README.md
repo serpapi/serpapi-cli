@@ -131,7 +131,7 @@ The API key comes from the first of:
 
 Without a key, `search` still runs, but the API answers only a few demo queries such as `q=coffee` and returns 401 for the rest. `account` and `archive` need a key.
 
-`serpapi login` saves the key, readable only by you, to `serpapi/config.toml` in the OS config directory: `$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows.
+`serpapi login` saves the key, readable only by you, to `serpapi/config.toml` in the OS config directory: `$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows. Without an absolute `HOME` (`%AppData%` on Windows) there is no config file: `login` exits 2, and other commands need `--api-key` or `SERPAPI_KEY`.
 
 ```toml
 api_key = "your_serpapi_key_here"
@@ -160,7 +160,7 @@ A config file that can't be read or isn't valid TOML is reported by path and lin
   | 1 | `network_error` | No answer, such as a timeout. |
   | 130 | `interrupted` | Stopped by Ctrl-C or SIGTERM after printing what had arrived, such as the `--all-pages` pages fetched so far. |
 
-- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `account`, `locations` and `archive` are free.
+- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free.
 - **No prompts without a terminal.** Only `serpapi login` reads stdin, and it waits for the first line, so pipe the key in (`printf %s "$KEY" | serpapi login`) or, simpler, set `SERPAPI_KEY`.
 
 ## Links
