@@ -1,6 +1,6 @@
 # serpapi-cli
 
-> Search engine results as JSON from [SerpApi](https://serpapi.com), for people, scripts and AI agents
+Search engine results as JSON from [SerpApi](https://serpapi.com), for people, scripts and AI agents
 
 ## Installation
 
@@ -11,7 +11,7 @@ brew tap serpapi/homebrew-tap
 brew install serpapi-cli
 ```
 
-### Pre-built Binaries
+### Pre-built binaries
 
 Download directly from [GitHub Releases](https://github.com/serpapi/serpapi-cli/releases)
 
@@ -23,7 +23,7 @@ go install github.com/serpapi/serpapi-cli/cmd/serpapi@latest
 
 This needs Go 1.25 or newer; with the default `GOTOOLCHAIN=auto`, Go 1.21 and later download it on their own.
 
-## Quick Start
+## Quick start
 
 Your API key is at <https://serpapi.com/manage-api-key>. Without one, `search` still answers a few demo queries such as `q=coffee`.
 
@@ -106,7 +106,7 @@ printf %s "$KEY" | serpapi login
 
 Prints the CLI version, as `--version` does.
 
-## Global Flags
+## Global flags
 
 - `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
 - `--fields <expr>`: search only; see [search](#search).
@@ -139,7 +139,7 @@ api_key = "your_serpapi_key_here"
 
 A config file that can't be read or isn't valid TOML is reported by path and line, never by content: `search` warns and runs without a key, while `account` and `archive` stop. `serpapi login` rewrites it.
 
-## For AI Agents
+## For AI agents
 
 `serpapi --help` is the full contract. In short:
 
