@@ -15,6 +15,7 @@ import (
 
 	"github.com/serpapi/serpapi-cli/pkg/config"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
+	"github.com/serpapi/serpapi-cli/pkg/output"
 )
 
 var loginCmd = &cobra.Command{
@@ -112,5 +113,5 @@ func accountEmail(ctx context.Context, apiKey string) (string, error) {
 	if json.Unmarshal(raw, &account) != nil || account.AccountEmail == "" {
 		return "unknown", nil
 	}
-	return account.AccountEmail, nil
+	return string(output.ForTerminal([]byte(account.AccountEmail))), nil
 }

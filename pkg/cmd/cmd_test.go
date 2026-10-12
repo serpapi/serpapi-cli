@@ -604,6 +604,24 @@ func TestLoginWithoutKey(t *testing.T) {
 	wantError(t, execute(t, "\n", "login"), 2, "usage_error", "No API key given")
 }
 
+// login shows the account's email on a terminal, so it must be as safe there
+// as a search result: a real PTY run printed ESC ] 52 and ESC [ 2J from it.
+func TestAccountEmailIsSafeOnATerminal(t *testing.T) {
+	fakeAPI(t, respond(`{"account_email":"dev\u001b]52;c;ZXZpbA==\u0007\u001b[2J\u202e@example.com"}`))
+
+	email, err := accountEmail(context.Background(), "testkey")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(email, "\x1b\x07\u202e") {
+		t.Errorf("accountEmail = %q, want control and bidi characters escaped", email)
+	}
+	if !strings.Contains(email, `dev\u001b]52`) {
+		t.Errorf("accountEmail = %q, want ESC written as \\u001b", email)
+	}
+}
+
 func TestNoCommandPrintsHelpToStderr(t *testing.T) {
 	fakeAPI(t, nil)
 
