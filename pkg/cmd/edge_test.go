@@ -517,6 +517,119 @@ func TestInterruptDuringJQKeepsWhatItPrinted(t *testing.T) {
 	}
 }
 
+// cancelAtEndOf cancels ctx as the client reads the last byte of page n:
+// after the page arrived, before anything is printed.
+func cancelAtEndOf(t *testing.T, n int, cancel context.CancelFunc) {
+	t.Helper()
+	orig := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp, err := orig.RoundTrip(r)
+		if err == nil && pageNumber(r) == n {
+			resp.Body = &onEOF{ReadCloser: resp.Body, do: cancel}
+		}
+		return resp, err
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// onEOF calls do once the body has been read to the end.
+type onEOF struct {
+	io.ReadCloser
+	do func()
+}
+
+func (b *onEOF) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.do()
+	}
+	return n, err
+}
+
+// A signal after the last page arrived, before it was printed, still prints
+// every page: all of them were billed.
+func TestInterruptAfterTheLastPagePrintsThemAll(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page(pageNumber(r), pageNumber(r) < 3)) })
+	t.Setenv("SERPAPI_KEY", "envkey")
+	cancelAtEndOf(t, 3, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results | length")...)
+
+	wantOK(t, res)
+	if res.stdout != "3\n" || ctx.Err() == nil {
+		t.Errorf("stdout = %q, signaled = %v; want --jq's result on all 3 pages after the signal", res.stdout, ctx.Err() != nil)
+	}
+}
+
+func TestInterruptAfterTheResponseStillRunsJQ(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, page(1, false)) })
+	t.Setenv("SERPAPI_KEY", "envkey")
+	cancelAtEndOf(t, 1, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--jq", ".organic_results[0].position")...)
+
+	wantOK(t, res)
+	if res.stdout != "1\n" || ctx.Err() == nil {
+		t.Errorf("stdout = %q, signaled = %v; want --jq's result after the signal", res.stdout, ctx.Err() != nil)
+	}
+}
+
+// --jq that fails on the pages fetched before a signal reports its own error:
+// those pages did arrive.
+func TestJQErrorAfterAnInterruptIsReported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results[].position, (.missing | keys)")...)
+
+	wantError(t, res, 2, "usage_error", "keys cannot be applied to: null")
+	if res.stdout != "1\n2\n" {
+		t.Errorf("stdout = %q, want what --jq printed before its error", res.stdout)
+	}
+}
+
+// After a signal, --jq on the fetched pages stops, and flushes what it
+// printed, before the process would exit at interruptGrace.
+func TestInterruptedJQStopsBeforeTheProcessExits(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = time.Second
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+	var watchdog lockedBuffer
+	done, returned := make(chan struct{}), make(chan struct{})
+	go func() {
+		exitAfterGrace(ctx, done, func() {}, &watchdog, func(int) {})
+		close(returned)
+	}()
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results[0].position, (reduce range(1e12) as $i (0; . + 1))")...)
+	close(done)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("exitAfterGrace never returned")
+	}
+
+	if got := watchdog.String(); got != "" {
+		t.Errorf("the process would have exited before --jq stopped: %s", got)
+	}
+	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
+	if res.stdout != "1\n" {
+		t.Errorf("stdout = %q, want the value --jq printed before it was stopped", res.stdout)
+	}
+}
+
 // lockedBuffer is a bytes.Buffer safe to write from another goroutine.
 type lockedBuffer struct {
 	mu  sync.Mutex

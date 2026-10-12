@@ -146,15 +146,15 @@ func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stde
 }
 
 // run executes the root command, reports any error on its stderr as JSON and
-// returns the exit code. A command stopped by canceling ctx exits 130.
+// returns the exit code. A request stopped by canceling ctx exits 130; an
+// error from what had already arrived, such as a failing --jq, keeps its own.
 func run(ctx context.Context) int {
 	initHelpCommand()
 	err := rootCmd.ExecuteContext(ctx)
 	if err == nil {
 		return 0
 	}
-	var interrupted *clierrors.InterruptedError
-	if ctx.Err() != nil && !errors.As(err, &interrupted) {
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
 		err = &clierrors.InterruptedError{Message: "Stopped before the response arrived"}
 	}
 	clierrors.FprintError(rootCmd.ErrOrStderr(), err)
@@ -343,7 +343,20 @@ func handleOutput(cmd *cobra.Command, raw []byte, next func(id string) string) e
 	if err := dec.Decode(&v); err != nil {
 		return &clierrors.APIError{Message: "Failed to parse response: " + err.Error()}
 	}
-	return printJQ(cmd.Context(), cmd, v)
+	ctx, cancel := printContext(cmd.Context())
+	defer cancel()
+	return printJQ(ctx, cmd, v)
+}
+
+// printContext is the context for printing a result that has arrived. After
+// a signal, the search was billed, so the result still prints, with --jq
+// stopped at half of interruptGrace: it then flushes and reports what it
+// printed before exitAfterGrace exits the process.
+func printContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil || ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), interruptGrace/2)
 }
 
 // printJQ runs --jq on v until ctx ends, printing each result as it is

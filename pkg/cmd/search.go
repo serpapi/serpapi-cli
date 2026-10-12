@@ -291,14 +291,9 @@ func searchAllPages(cmd *cobra.Command, client *api.Client, first map[string]str
 		warnNothingMatched(cmd)
 	}
 
-	// Pages fetched before Ctrl-C were billed, so --jq still runs on them, for
-	// at most interruptGrace; the process exits about then anyway.
-	printCtx := ctx
-	if pageErr != nil && ctx.Err() != nil {
-		var cancel context.CancelFunc
-		printCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), interruptGrace)
-		defer cancel()
-	}
+	// Pages fetched before Ctrl-C were billed, so --jq still runs on them.
+	printCtx, cancel := printContext(ctx)
+	defer cancel()
 	if err := printMerged(printCtx, cmd, merged, searchHint(first)("")); err != nil {
 		return err
 	}
