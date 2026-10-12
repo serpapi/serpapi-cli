@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -103,11 +105,17 @@ func execute(t *testing.T, stdin string, args ...string) result {
 // executeContext is execute with a context the test can cancel, as Ctrl-C does.
 func executeContext(t *testing.T, ctx context.Context, stdin string, args ...string) result {
 	t.Helper()
+	return executeInput(t, ctx, strings.NewReader(stdin), args...)
+}
+
+// executeInput is executeContext with any stdin, such as a pipe that stays open.
+func executeInput(t *testing.T, ctx context.Context, stdin io.Reader, args ...string) result {
+	t.Helper()
 	resetFlags(rootCmd)
 	var stdout, stderr bytes.Buffer
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetErr(&stderr)
-	rootCmd.SetIn(strings.NewReader(stdin))
+	rootCmd.SetIn(stdin)
 	// A nil slice would make cobra parse the test binary's own arguments.
 	rootCmd.SetArgs(append([]string{}, args...))
 	code := run(ctx)
@@ -604,6 +612,28 @@ func TestLoginRejectsInvalidKeyWithoutSaving(t *testing.T) {
 func TestLoginWithoutKey(t *testing.T) {
 	fakeAPI(t, nil)
 	wantError(t, execute(t, "\n", "login"), 2, "usage_error", "No API key given")
+}
+
+// An agent's timeout sends SIGTERM to a login still waiting on an open pipe;
+// it has to stop then, not when the grace period runs out.
+func TestLoginStopsAtOnceWhenInterrupted(t *testing.T) {
+	fakeAPI(t, nil)
+	stdin, writer := io.Pipe()
+	t.Cleanup(func() { writer.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	res := executeInput(t, ctx, stdin, "login")
+
+	wantError(t, res, 130, "interrupted", "Stopped while waiting for the API key on stdin; nothing was saved")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("login took %v to stop, want well under the %v grace period", elapsed, interruptGrace)
+	}
+	if _, err := os.Stat(config.Path()); !os.IsNotExist(err) {
+		t.Errorf("config file after an interrupted login: %v", err)
+	}
 }
 
 // login shows the account's email on a terminal, so it must be as safe there

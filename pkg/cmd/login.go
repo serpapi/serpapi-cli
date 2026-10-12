@@ -67,30 +67,55 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 }
 
 // readAPIKey prompts on a terminal and otherwise reads the first line of
-// stdin. It returns "" and no error when the user keeps the saved key.
+// stdin. It returns "" and no error when the user keeps the saved key. Ctrl-C
+// or SIGTERM stops it at once with an interrupted error.
 func readAPIKey(cmd *cobra.Command) (string, error) {
+	ctx := cmd.Context()
 	stderr := cmd.ErrOrStderr()
 	var key string
 	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		if saved, err := config.LoadAPIKey(); err == nil && saved != "" {
-			if email, err := accountEmail(cmd.Context(), saved); err == nil {
+			if email, err := accountEmail(ctx, saved); err == nil {
 				fmt.Fprintf(stderr, "Already logged in as %s. Replace the saved key? [y/N] ", email)
-				line, _ := bufio.NewReader(f).ReadString('\n')
+				line, err := readInterruptibly(ctx, func() (string, error) { return bufio.NewReader(f).ReadString('\n') },
+					"Stopped at the prompt; the saved key is unchanged")
+				if isInterrupted(err) {
+					fmt.Fprintln(stderr)
+					return "", err
+				}
 				if !strings.EqualFold(strings.TrimSpace(line), "y") {
 					fmt.Fprintln(stderr, "Kept the saved key.")
 					return "", nil
 				}
 			}
 		}
+		const stopped = "Stopped at the API key prompt; nothing was saved"
+		if ctx.Err() != nil {
+			return "", &clierrors.InterruptedError{Message: stopped}
+		}
+		// ReadPassword turns echo off until it returns, which it doesn't on
+		// Ctrl-C, so the state saved here is put back then.
+		fd := int(f.Fd())
+		state, _ := term.GetState(fd)
 		fmt.Fprint(stderr, "SerpApi API key (input hidden): ")
-		b, err := term.ReadPassword(int(f.Fd()))
+		b, err := readInterruptibly(ctx, func() ([]byte, error) { return term.ReadPassword(fd) }, stopped)
+		if isInterrupted(err) && state != nil {
+			_ = term.Restore(fd, state)
+		}
 		fmt.Fprintln(stderr)
+		if isInterrupted(err) {
+			return "", err
+		}
 		if err != nil {
 			return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
 		}
 		key = string(b)
 	} else {
-		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		line, err := readInterruptibly(ctx, func() (string, error) { return bufio.NewReader(cmd.InOrStdin()).ReadString('\n') },
+			"Stopped while waiting for the API key on stdin; nothing was saved")
+		if isInterrupted(err) {
+			return "", err
+		}
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
 		}
@@ -100,6 +125,33 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 		return "", &clierrors.UsageError{Message: `No API key given. Use: printf %s "$KEY" | serpapi login`}
 	}
 	return key, nil
+}
+
+// readInterruptibly returns what read returns, or an interrupted error with
+// the stopped message as soon as ctx is canceled. A read from a terminal or a
+// pipe can't be canceled itself; it ends with the process.
+func readInterruptibly[T any](ctx context.Context, read func() (T, error), stopped string) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, err := read()
+		done <- result{v, err}
+	}()
+	select {
+	case r := <-done:
+		return r.v, r.err
+	case <-ctx.Done():
+		var zero T
+		return zero, &clierrors.InterruptedError{Message: stopped}
+	}
+}
+
+func isInterrupted(err error) bool {
+	var interrupted *clierrors.InterruptedError
+	return errors.As(err, &interrupted)
 }
 
 func accountEmail(ctx context.Context, apiKey string) (string, error) {
