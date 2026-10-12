@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -18,14 +19,14 @@ type configFile struct {
 }
 
 // Dir returns the directory where the CLI stores its config, or "" when
-// neither the user config directory nor the home directory is known: a
-// relative directory would put the key in, or take it from, wherever the
+// neither the user config directory nor the home directory is an absolute
+// path: a relative one would put the key in, or take it from, wherever the
 // command runs.
 func Dir() string {
-	if dir, err := os.UserConfigDir(); err == nil {
+	if dir, err := os.UserConfigDir(); err == nil && filepath.IsAbs(dir) {
 		return filepath.Join(dir, "serpapi")
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
 		return filepath.Join(home, ".config", "serpapi")
 	}
 	return ""
@@ -80,7 +81,12 @@ func LoadAPIKey() (string, error) {
 func SaveConfig(apiKey string) error {
 	dir := Dir()
 	if dir == "" {
-		return &clierrors.UsageError{Message: "No directory to save the API key in: HOME is not set; set HOME, or pass the key with SERPAPI_KEY instead of saving it"}
+		home := "HOME"
+		if runtime.GOOS == "windows" {
+			home = "%AppData%"
+		}
+		return &clierrors.UsageError{Message: "No directory to save the API key in: " + home +
+			" is not set to an absolute path; set it, or pass the key with SERPAPI_KEY instead of saving it"}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return &clierrors.UsageError{Message: "Failed to create config dir: " + err.Error()}
