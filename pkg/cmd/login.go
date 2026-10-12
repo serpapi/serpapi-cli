@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,23 +94,12 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 		if ctx.Err() != nil {
 			return "", &clierrors.InterruptedError{Message: stopped}
 		}
-		// ReadPassword turns echo off until it returns, which it doesn't on
-		// Ctrl-C, so the state saved here is put back then.
-		fd := int(f.Fd())
-		state, _ := term.GetState(fd)
 		fmt.Fprint(stderr, "SerpApi API key (input hidden): ")
-		b, err := readInterruptibly(ctx, func() ([]byte, error) { return term.ReadPassword(fd) }, stopped)
-		if isInterrupted(err) && state != nil {
-			_ = term.Restore(fd, state)
-		}
-		fmt.Fprintln(stderr)
-		if isInterrupted(err) {
+		line, err := readHidden(ctx, f, stderr, stopped)
+		if err != nil {
 			return "", err
 		}
-		if err != nil {
-			return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
-		}
-		key = string(b)
+		key = line
 	} else {
 		in := bufio.NewReader(cmd.InOrStdin())
 		line, err := readInterruptibly(ctx, func() (string, error) { return in.ReadString('\n') },
@@ -126,6 +116,58 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 		return "", &clierrors.UsageError{Message: `No API key given. Use: printf %s "$KEY" | serpapi login`}
 	}
 	return key, nil
+}
+
+// readHidden reads a line from the terminal f without showing it. Raw mode is
+// set and undone here, not in the goroutine that reads, so a read that a
+// signal leaves running can't turn echo off again after it was restored. In
+// raw mode Ctrl-C is a key rather than a signal, and stops the read the same
+// way; Ctrl-D gives no key.
+func readHidden(ctx context.Context, f *os.File, stderr io.Writer, stopped string) (string, error) {
+	fd := int(f.Fd())
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
+	}
+	in := &ctrlCWatch{r: f}
+	t := term.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{in, stderr}, "")
+	line, err := readInterruptibly(ctx, func() (string, error) { return t.ReadPassword("") }, stopped)
+	_ = term.Restore(fd, state)
+	if errors.Is(err, term.ErrPasteIndicator) {
+		err = nil
+	}
+	if err != nil {
+		fmt.Fprintln(stderr)
+	}
+	switch {
+	case err == nil:
+		return line, nil
+	case isInterrupted(err):
+		return "", err
+	case errors.Is(err, io.EOF) && in.ctrlC:
+		return "", &clierrors.InterruptedError{Message: stopped}
+	case errors.Is(err, io.EOF):
+		return "", nil
+	}
+	return "", &clierrors.UsageError{Message: "Failed to read the API key: " + err.Error()}
+}
+
+// ctrlCWatch notes a Ctrl-C, which raw mode passes on as a key. Only the
+// reading goroutine writes ctrlC; it is read after that goroutine returned.
+type ctrlCWatch struct {
+	r     io.Reader
+	ctrlC bool
+}
+
+func (w *ctrlCWatch) Read(p []byte) (int, error) {
+	n, err := w.r.Read(p)
+	if bytes.IndexByte(p[:n], 3) >= 0 {
+		w.ctrlC = true
+	}
+	return n, err
 }
 
 // readInterruptibly returns what read returns, or an interrupted error with
