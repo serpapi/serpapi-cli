@@ -111,7 +111,8 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 		}
 		key = string(b)
 	} else {
-		line, err := readInterruptibly(ctx, func() (string, error) { return bufio.NewReader(cmd.InOrStdin()).ReadString('\n') },
+		in := bufio.NewReader(cmd.InOrStdin())
+		line, err := readInterruptibly(ctx, func() (string, error) { return in.ReadString('\n') },
 			"Stopped while waiting for the API key on stdin; nothing was saved")
 		if isInterrupted(err) {
 			return "", err
@@ -129,7 +130,8 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 
 // readInterruptibly returns what read returns, or an interrupted error with
 // the stopped message as soon as ctx is canceled. A read from a terminal or a
-// pipe can't be canceled itself; it ends with the process.
+// pipe can't be canceled itself; it ends with the process. read outlives an
+// interrupted call, so it must not touch the command.
 func readInterruptibly[T any](ctx context.Context, read func() (T, error), stopped string) (T, error) {
 	type result struct {
 		v   T
