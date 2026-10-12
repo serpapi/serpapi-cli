@@ -114,21 +114,58 @@ func archiveHint(string) string { return "add --jq '.KEY'; reading the archive i
 
 // searchHint returns the next step for a large result of the search sent
 // with p: re-reading the stored search is free, and so is the same search
-// within the cache hour, unless no_cache asked for a new one.
+// within the cache hour, unless no_cache asked for a new one. ZeroTrace
+// stores nothing and skips the cache.
 func searchHint(p map[string]string) func(id string) string {
 	return func(id string) string {
-		if id != "" {
+		zeroTrace, noCache := apiBool(p, "zero_trace"), apiBool(p, "no_cache")
+		if id != "" && zeroTrace == paramOff {
 			return fmt.Sprintf("read the stored search for free: serpapi archive %s --jq '.KEY'", id)
 		}
-		if v := p["no_cache"]; v != "" && v != "false" && v != "0" {
-			hint := "repeat the command with --jq '.KEY'; no_cache=" + v + " makes the repeat a new, counted search"
-			if allPagesFlag {
-				hint += " for each page"
-			}
-			return hint
+		hint := "repeat the command with --jq '.KEY'"
+		switch {
+		case zeroTrace == paramOn:
+			hint += "; zero_trace=" + p["zero_trace"] + " stores nothing and makes the repeat a new, counted search"
+		case zeroTrace == paramUnsure:
+			hint += "; with zero_trace=" + p["zero_trace"] + " the repeat may be a new, counted search"
+		case noCache == paramOn:
+			hint += "; no_cache=" + p["no_cache"] + " makes the repeat a new, counted search"
+		case noCache == paramUnsure:
+			hint += "; with no_cache=" + p["no_cache"] + " the repeat may be a new, counted search"
+		default:
+			return hint + ": the same search within an hour comes from the cache"
 		}
-		return "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"
+		if allPagesFlag {
+			hint += " for each page"
+		}
+		return hint
 	}
+}
+
+type paramBool int
+
+const (
+	paramOff paramBool = iota
+	paramOn
+	paramUnsure
+)
+
+// apiBool reads a boolean parameter as the API does, through Mongoid 7.5's
+// Boolean.evolve: its true words, in any case, are on, and anything else is
+// off. Mongoid 8 keeps any other word as a string, which Ruby takes as true,
+// so only its false words are sure to stay off.
+func apiBool(p map[string]string, key string) paramBool {
+	v, ok := p[key]
+	if !ok {
+		return paramOff
+	}
+	switch strings.ToLower(v) {
+	case "true", "t", "yes", "y", "on", "1", "1.0":
+		return paramOn
+	case "false", "f", "no", "n", "off", "0", "0.0":
+		return paramOff
+	}
+	return paramUnsure
 }
 
 func sizeText(n int) string {
