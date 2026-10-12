@@ -603,9 +603,9 @@ func TestInterruptedJQStopsBeforeTheProcessExits(t *testing.T) {
 	grace := interruptGrace
 	interruptGrace = time.Second
 	t.Cleanup(func() { interruptGrace = grace })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	interruptAtPage3(t, cancel)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	interruptAtPage3(t, func() { cancel(&signaled{at: time.Now()}) })
 	var watchdog lockedBuffer
 	done, returned := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -680,4 +680,60 @@ func TestExitAfterGrace(t *testing.T) {
 		exitAfterGrace(context.Background(), done, func() { t.Error("stop called without a signal") }, io.Discard,
 			func(code int) { t.Errorf("exit(%d) without a signal", code) })
 	})
+}
+
+// The process exits interruptGrace after the signal, however long the
+// command took to notice it.
+func TestExitAfterGraceCountsFromTheSignal(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = 2 * time.Second
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(&signaled{at: time.Now().Add(-interruptGrace)})
+	exited := make(chan struct{})
+	start := time.Now()
+
+	go exitAfterGrace(ctx, make(chan struct{}), func() {}, io.Discard, func(int) { close(exited) })
+
+	select {
+	case <-exited:
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("exited %v after the watchdog woke, want at once: the grace had run out", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("never exited")
+	}
+}
+
+// --jq after a signal stops a quarter of interruptGrace before the process
+// exits, counted from the signal, so a slow decode before printing doesn't
+// push it past the exit.
+func TestPrintDeadlineCountsFromTheSignal(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	at := time.Now().Add(-time.Second)
+	cancel(&signaled{at: at})
+
+	printCtx, stop := printContext(ctx)
+	defer stop()
+
+	want := at.Add(interruptGrace - interruptGrace/4)
+	if d, ok := printCtx.Deadline(); !ok || !d.Equal(want) {
+		t.Errorf("deadline %v (set: %v), want %v", d, ok, want)
+	}
+}
+
+// net/http reports a canceled request with the context's cause, so a signal
+// still reads as a stop before the response.
+func TestSignalBeforeTheResponse(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	fakeAPI(t, func(_ http.ResponseWriter, r *http.Request) {
+		cancel(&signaled{at: time.Now()})
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := executeContext(t, ctx, "", search...)
+
+	wantError(t, res, 130, "interrupted", "Stopped before the response arrived")
 }

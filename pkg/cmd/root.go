@@ -112,21 +112,50 @@ read. account, locations and archive are free.`,
 // signal before the process exits anyway.
 var interruptGrace = 3 * time.Second
 
+// signaled is the cause Execute cancels the command's context with, so code
+// that sees the cancellation knows when the signal came.
+type signaled struct{ at time.Time }
+
+func (*signaled) Error() string { return "stopped by Ctrl-C or SIGTERM" }
+
+// Unwrap keeps errors.Is(err, context.Canceled) true for a request it
+// stopped: net/http reports the context's cause, not context.Canceled.
+func (*signaled) Unwrap() error { return context.Canceled }
+
+// exitTime is when the process exits after the first signal: interruptGrace
+// after it. A context canceled without a signal time counts from now.
+func exitTime(ctx context.Context) time.Time {
+	var s *signaled
+	if errors.As(context.Cause(ctx), &s) {
+		return s.at.Add(interruptGrace)
+	}
+	return time.Now().Add(interruptGrace)
+}
+
 // Execute runs the root command. The first Ctrl-C or SIGTERM cancels the
 // command's context so it can print what it has; a second one kills it.
 func Execute() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stop := func() { cancel(&signaled{at: time.Now()}) }
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		stop()
+	}()
+	restoreDefault := func() { signal.Stop(sigs) }
 	done := make(chan struct{})
-	go exitAfterGrace(ctx, done, stop, rootCmd.ErrOrStderr(), os.Exit)
+	go exitAfterGrace(ctx, done, restoreDefault, rootCmd.ErrOrStderr(), os.Exit)
 	code := run(ctx)
 	close(done)
-	stop()
+	restoreDefault()
 	os.Exit(code)
 }
 
 // exitAfterGrace waits for the first signal, restores the default handling
 // so that a second one kills the process, and exits 130 if the command is
-// still running interruptGrace later, as it is when blocked on a full pipe.
+// still running interruptGrace after the signal, as it is when blocked on a
+// full pipe.
 func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stderr io.Writer, exit func(int)) {
 	select {
 	case <-done:
@@ -136,7 +165,7 @@ func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stde
 	stop()
 	select {
 	case <-done:
-	case <-time.After(interruptGrace):
+	case <-time.After(time.Until(exitTime(ctx))):
 		// stderr may be the full pipe, so the message gets a moment, not a promise.
 		go clierrors.FprintError(stderr, &clierrors.InterruptedError{
 			Message: fmt.Sprintf("Stopped %s after the signal; the output may be cut off", interruptGrace),
@@ -350,14 +379,14 @@ func handleOutput(cmd *cobra.Command, raw []byte, next func(id string) string) e
 }
 
 // printContext is the context for printing a result that has arrived. After
-// a signal, the search was billed, so the result still prints, with --jq
-// stopped at half of interruptGrace: it then flushes and reports what it
-// printed before exitAfterGrace exits the process.
+// a signal the search was billed, so the result still prints, with --jq
+// stopped a quarter of interruptGrace before the process exits: that leaves
+// it time to flush and report what it printed.
 func printContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil || ctx.Err() == nil {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(context.WithoutCancel(ctx), interruptGrace/2)
+	return context.WithDeadline(context.WithoutCancel(ctx), exitTime(ctx).Add(-interruptGrace/4))
 }
 
 // printJQ runs --jq on v until ctx ends, printing each result as it is
