@@ -1,7 +1,9 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,12 @@ import (
 var binaryPath string
 
 func TestMain(m *testing.M) {
+	os.Exit(run(m))
+}
+
+// run builds the binary into a temp dir and runs the tests. It is separate
+// from TestMain because os.Exit skips deferred calls, which leaked the dir.
+func run(m *testing.M) int {
 	tmpDir, err := os.MkdirTemp("", "serpapi-e2e-*")
 	if err != nil {
 		panic("failed to create temp dir: " + err.Error())
@@ -25,7 +33,7 @@ func TestMain(m *testing.M) {
 		panic("failed to build binary: " + err.Error() + "\n" + string(out))
 	}
 	binaryPath = bin
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 func findRepoRoot() string {
@@ -42,7 +50,9 @@ func findRepoRoot() string {
 	}
 }
 
-func requireKey(t *testing.T) string {
+// requireLive returns SERPAPI_KEY and skips the test without it. Live tests
+// reach the real API and can use searches.
+func requireLive(t *testing.T) string {
 	t.Helper()
 	key := os.Getenv("SERPAPI_KEY")
 	if key == "" {
@@ -51,118 +61,206 @@ func requireKey(t *testing.T) string {
 	return key
 }
 
-func TestSearchBasic(t *testing.T) {
-	key := requireKey(t)
-	cmd := exec.Command(binaryPath, "--api-key", key, "search", "engine=google", "q=coffee")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
+type result struct {
+	code           int
+	stdout, stderr string
+}
+
+// serpapi runs the binary with a fresh config directory and no key in the environment.
+func serpapi(t *testing.T, stdin string, args ...string) result {
+	t.Helper()
+	return serpapiIn(t, t.TempDir(), stdin, args...)
+}
+
+func serpapiIn(t *testing.T, home, stdin string, args ...string) result {
+	t.Helper()
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home, "XDG_CONFIG_HOME="+home, "AppData="+home,
+		"SERPAPI_KEY=", "SERPAPI_API_KEY=", "NO_COLOR=1")
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	var res result
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("running serpapi: %v", err)
+		}
+		res.code = exitErr.ExitCode()
 	}
-	if !strings.Contains(string(out), "search_metadata") {
+	res.stdout, res.stderr = stdout.String(), stderr.String()
+	return res
+}
+
+func wantSuccess(t *testing.T, res result) {
+	t.Helper()
+	if res.code != 0 {
+		t.Fatalf("exit code %d, stderr: %s", res.code, res.stderr)
+	}
+}
+
+// errorJSON parses the error that failed commands print as the last stderr line.
+func errorJSON(t *testing.T, res result) map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(res.stderr), "\n")
+	var v struct {
+		Error map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &v); err != nil || v.Error == nil {
+		t.Fatalf("last stderr line is not a JSON error: %q", res.stderr)
+	}
+	return v.Error
+}
+
+func TestUsageErrorsWithoutNetwork(t *testing.T) {
+	tests := []struct {
+		args []string
+		msg  string
+	}{
+		{nil, "No command given"},
+		{[]string{"account"}, "No API key found"},
+		{[]string{"archive", "abc123"}, "No API key found"},
+		{[]string{"--api-key", "x", "archive", "../bad"}, "Invalid archive ID"},
+		{[]string{"--api-key", "x", "search", "engine=google", "q=coffee", "output=xml"}, "Unknown output=xml"},
+		{[]string{"locations"}, "Pass a location query"},
+	}
+	for _, tt := range tests {
+		res := serpapi(t, "", tt.args...)
+		if res.code != 2 {
+			t.Errorf("%v: exit code %d, want 2; stderr: %s", tt.args, res.code, res.stderr)
+			continue
+		}
+		e := errorJSON(t, res)
+		if msg, _ := e["message"].(string); e["code"] != "usage_error" || !strings.Contains(msg, tt.msg) {
+			t.Errorf("%v: error %v, want usage_error containing %q", tt.args, e, tt.msg)
+		}
+		if res.stdout != "" {
+			t.Errorf("%v: stdout %q, want empty", tt.args, res.stdout)
+		}
+	}
+}
+
+func TestHelpAndVersion(t *testing.T) {
+	res := serpapi(t, "", "--help")
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, "search") {
+		t.Errorf("help does not mention search: %s", res.stdout)
+	}
+
+	res = serpapi(t, "", "--version")
+	wantSuccess(t, res)
+	if !strings.HasPrefix(res.stdout, "serpapi version ") {
+		t.Errorf("version output %q", res.stdout)
+	}
+}
+
+func TestSearchBasic(t *testing.T) {
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "search", "engine=google", "q=coffee")
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, "search_metadata") {
 		t.Error("expected output to contain search_metadata")
 	}
 }
 
 func TestSearchWithFields(t *testing.T) {
-	key := requireKey(t)
-	cmd := exec.Command(binaryPath, "--api-key", key, "--fields", "organic_results[0:2]", "search", "engine=google", "q=coffee")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("search with fields failed: %v", err)
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "--fields", "organic_results[0:2]", "search", "engine=google", "q=coffee")
+	wantSuccess(t, res)
+	var v struct {
+		OrganicResults []any           `json:"organic_results"`
+		Metadata       json.RawMessage `json:"search_metadata"`
 	}
-	output := string(out)
-	if !strings.Contains(output, "[") && !strings.Contains(output, "{") {
-		t.Error("expected JSON output")
+	if err := json.Unmarshal([]byte(res.stdout), &v); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
+	}
+	if n := len(v.OrganicResults); n == 0 || n > 2 {
+		t.Errorf("got %d organic results, want 1-2", n)
+	}
+	if v.Metadata != nil {
+		t.Error("--fields kept search_metadata")
 	}
 }
 
 func TestSearchWithJQ(t *testing.T) {
-	key := requireKey(t)
-	cmd := exec.Command(binaryPath, "--api-key", key, "--jq", ".search_metadata.id", "search", "engine=google", "q=coffee")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("search with jq failed: %v", err)
-	}
-	if len(strings.TrimSpace(string(out))) == 0 {
-		t.Error("expected non-empty jq output")
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "--jq", ".search_metadata.id", "search", "engine=google", "q=coffee")
+	wantSuccess(t, res)
+	if id := strings.TrimSpace(res.stdout); id == "" || strings.Contains(id, `"`) {
+		t.Errorf("want one unquoted search ID, got %q", res.stdout)
 	}
 }
 
 func TestAccount(t *testing.T) {
-	key := requireKey(t)
-	cmd := exec.Command(binaryPath, "--api-key", key, "account")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("account failed: %v", err)
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "account")
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, "account_email") {
+		t.Error("expected account_email in output")
 	}
-	output := string(out)
-	if !strings.Contains(output, "account_email") && !strings.Contains(output, "plan") {
-		t.Error("expected account info in output")
+	if strings.Contains(res.stdout, key) {
+		t.Error("account output contains the full API key")
 	}
 }
 
 func TestLocations(t *testing.T) {
-	// Locations don't require API key but need network
-	cmd := exec.Command(binaryPath, "locations", "q=austin", "num=3")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Skip("locations endpoint unreachable")
+	requireLive(t)
+	res := serpapi(t, "", "locations", "q=austin", "limit=3")
+	wantSuccess(t, res)
+	var locations []map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &locations); err != nil {
+		t.Fatalf("output is not a JSON array: %v", err)
 	}
-	output := string(out)
-	if !strings.Contains(output, "[") && !strings.Contains(output, "canonical_name") {
-		t.Error("expected locations JSON output")
+	if n := len(locations); n == 0 || n > 3 {
+		t.Fatalf("got %d locations, want 1-3", n)
+	}
+	if locations[0]["canonical_name"] == nil {
+		t.Errorf("location has no canonical_name: %v", locations[0])
 	}
 }
 
 func TestArchive(t *testing.T) {
-	key := requireKey(t)
+	key := requireLive(t)
 
 	// Search without no_cache so the result is immediately archived.
-	searchCmd := exec.Command(binaryPath, "--api-key", key, "search", "engine=google", "q=coffee")
-	searchOut, err := searchCmd.Output()
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
+	res := serpapi(t, "", "--api-key", key, "--jq", ".search_metadata.id", "search", "engine=google", "q=coffee")
+	wantSuccess(t, res)
+	searchID := strings.TrimSpace(res.stdout)
+
+	res = serpapi(t, "", "--api-key", key, "archive", searchID)
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, searchID) {
+		t.Error("expected the search ID in the archived result")
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(searchOut, &result); err != nil {
-		t.Fatalf("failed to parse search output: %v", err)
-	}
-
-	meta, ok := result["search_metadata"].(map[string]any)
-	if !ok {
-		t.Fatal("no search_metadata in result")
-	}
-	searchID, ok := meta["id"].(string)
-	if !ok || searchID == "" {
-		t.Fatal("no search ID in search_metadata")
-	}
-
-	cmd := exec.Command(binaryPath, "--api-key", key, "archive", searchID)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("archive failed: %v\n%s", err, out)
-	}
-	output := string(out)
-	if !strings.Contains(output, "search_metadata") {
-		t.Error("expected search_metadata in archive result")
+	res = serpapi(t, "", "--api-key", key, "archive", searchID, "output=md")
+	wantSuccess(t, res)
+	if strings.TrimSpace(res.stdout) == "" {
+		t.Error("expected Markdown output for the archived search")
 	}
 }
 
 func TestSearchAllPages(t *testing.T) {
-	key := requireKey(t)
-	cmd := exec.Command(binaryPath, "--api-key", key, "search", "engine=google", "q=coffee", "num=1", "--all-pages", "--max-pages", "2")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("search all pages failed: %v", err)
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "search", "engine=google", "q=coffee",
+		"--fields", "organic_results", "--all-pages", "--max-pages", "2")
+	wantSuccess(t, res)
+	var v map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(res.stdout), &v); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
 	}
-	if !strings.Contains(string(out), "organic_results") {
+	if v["organic_results"] == nil {
 		t.Error("expected organic_results in merged output")
+	}
+	if v["serpapi_pagination"] != nil {
+		t.Error("merged output keeps serpapi_pagination")
 	}
 }
 
 func TestSearchAllPagesWithFields(t *testing.T) {
-	key := requireKey(t)
+	key := requireLive(t)
 	cmd := exec.Command(
 		binaryPath,
 		"--api-key", key,
@@ -218,39 +316,29 @@ func TestSearchAllPagesWithFields(t *testing.T) {
 }
 
 func TestInvalidAPIKey(t *testing.T) {
-	cmd := exec.Command(binaryPath, "--api-key", "invalid", "search", "engine=google", "q=test")
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected failure with invalid API key")
+	requireLive(t)
+	res := serpapi(t, "", "--api-key", "invalid", "search", "engine=google", "q=test")
+	if res.code != 1 {
+		t.Fatalf("exit code %d, want 1; stderr: %s", res.code, res.stderr)
 	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		if exitErr.ExitCode() != 1 {
-			t.Errorf("expected exit code 1, got %d", exitErr.ExitCode())
-		}
-	}
-}
-
-func TestNoArgs(t *testing.T) {
-	cmd := exec.Command(binaryPath)
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("expected failure with no args")
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		if exitErr.ExitCode() != 2 {
-			t.Errorf("expected exit code 2, got %d", exitErr.ExitCode())
-		}
+	if e := errorJSON(t, res); e["code"] != "api_error" || e["status"] != float64(401) {
+		t.Errorf("error %v, want api_error with status 401", e)
 	}
 }
 
 func TestLoginFlow(t *testing.T) {
-	key := requireKey(t)
-	// Run login in an isolated HOME so it doesn't touch the real config.
-	tmpHome := t.TempDir()
-	cmd := exec.Command(binaryPath, "login")
-	cmd.Stdin = strings.NewReader(key + "\n")
-	cmd.Env = append(os.Environ(), "HOME="+tmpHome, "XDG_CONFIG_HOME="+tmpHome)
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("login failed: %v", err)
+	key := requireLive(t)
+	home := t.TempDir()
+
+	res := serpapiIn(t, home, key+"\n", "login")
+	wantSuccess(t, res)
+	if res.stderr != "" {
+		t.Errorf("login without a terminal should succeed silently, stderr: %s", res.stderr)
+	}
+
+	res = serpapiIn(t, home, "", "account")
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, "account_email") {
+		t.Error("the saved key did not work")
 	}
 }

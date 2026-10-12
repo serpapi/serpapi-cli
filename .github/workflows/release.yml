@@ -5,6 +5,8 @@ on:
     tags:
       - "v*"
 
+permissions: {}
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
@@ -16,7 +18,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version-file: go.mod
+          # Not go.mod: its go line is the minimum for go install users, while
+          # release binaries need the latest patched Go (v0.2.3 shipped go1.25.0).
+          go-version: stable
+          check-latest: true
       - uses: goreleaser/goreleaser-action@9ed2f89a662bf1735a48bc8557fd212fa902bebf # v6.2.1
         with:
           version: ~> v2

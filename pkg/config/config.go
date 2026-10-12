@@ -2,8 +2,12 @@ package config
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
@@ -30,20 +34,34 @@ func Path() string {
 	return filepath.Join(Dir(), "config.toml")
 }
 
-// LoadAPIKey reads the API key from the config file, if present.
-func LoadAPIKey() (string, bool) {
+// ErrNoAPIKey is returned by ResolveAPIKey when no source has a key.
+var ErrNoAPIKey = &clierrors.UsageError{
+	Message: "No API key found. Pass --api-key, set SERPAPI_KEY (or SERPAPI_API_KEY), or run 'serpapi login'. Get a key at https://serpapi.com/manage-api-key",
+}
+
+// LoadAPIKey returns the API key saved in the config file, or "" when there
+// is none. A file that can't be read or parsed is an error naming the file
+// and line; it never quotes the file, which holds the key.
+func LoadAPIKey() (string, error) {
 	data, err := os.ReadFile(Path())
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
-		return "", false
+		return "", &clierrors.UsageError{Message: "Cannot read the config file: " + err.Error() +
+			"; fix its permissions, or pass --api-key or SERPAPI_KEY"}
 	}
 	var cfg configFile
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return "", false
+		where := ""
+		var parseErr toml.ParseError
+		if errors.As(err, &parseErr) && parseErr.Position.Line > 0 {
+			where = fmt.Sprintf(" (line %d)", parseErr.Position.Line)
+		}
+		return "", &clierrors.UsageError{Message: "The config file " + Path() + " is not valid TOML" + where +
+			"; run 'serpapi login' to rewrite it, or pass --api-key or SERPAPI_KEY"}
 	}
-	if cfg.APIKey == "" {
-		return "", false
-	}
-	return cfg.APIKey, true
+	return strings.TrimSpace(cfg.APIKey), nil
 }
 
 // SaveConfig writes the API key to the config file atomically.
@@ -66,12 +84,8 @@ func SaveConfig(apiKey string) error {
 		return &clierrors.UsageError{Message: err.Error()}
 	}
 
-	// os.Remove before os.Rename is needed for Windows, which cannot
-	// atomically rename over an existing file. On Unix, os.Rename is atomic.
-	if err := os.Remove(finalPath); err != nil && !os.IsNotExist(err) {
-		os.Remove(tmpPath)
-		return &clierrors.UsageError{Message: "Failed to save config: " + err.Error()}
-	}
+	// os.Rename replaces an existing file on Windows too (MoveFileEx with
+	// MOVEFILE_REPLACE_EXISTING), so the old key stays until the new one lands.
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
 		return &clierrors.UsageError{Message: "Failed to save config: " + err.Error()}
@@ -89,16 +103,20 @@ func tomlMarshal(cfg configFile) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ResolveAPIKey resolves the API key from the given flag value (which may
-// already incorporate the env var), falling back to the config file.
+// ResolveAPIKey returns the given key (from a flag or environment variable)
+// or, when it is empty, the key saved in the config file. It returns
+// ErrNoAPIKey when there is none, and the config file's error when the
+// saved key is needed but the file is broken.
 func ResolveAPIKey(fromFlag string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
 	}
-	if key, ok := LoadAPIKey(); ok {
-		return key, nil
+	key, err := LoadAPIKey()
+	if err != nil {
+		return "", err
 	}
-	return "", &clierrors.UsageError{
-		Message: "No API key found. Run 'serpapi login' or set SERPAPI_KEY.",
+	if key == "" {
+		return "", ErrNoAPIKey
 	}
+	return key, nil
 }

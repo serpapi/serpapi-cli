@@ -20,23 +20,11 @@ func TestCanonicalParamsKeyIsOrderIndependent(t *testing.T) {
 	}
 }
 
-func TestWithPaginationRestrictor(t *testing.T) {
-	if got := withPaginationRestrictor(""); got != "" {
-		t.Errorf("expected empty restrictor, got %q", got)
-	}
-
-	const fields = "organic_results[].{title,link}"
-	want := fields + ",serpapi_pagination.next"
-	if got := withPaginationRestrictor(fields); got != want {
-		t.Errorf("expected %q, got %q", want, got)
-	}
-}
-
 func TestParseNextParams(t *testing.T) {
 	const restrictor = "organic_results[].{title,link},serpapi_pagination.next"
 	params, err := parseNextParams(
 		"https://serpapi.com/search.json?q=coffee&start=10&engine=google",
-		restrictor,
+		map[string]string{"json_restrictor": restrictor},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -52,5 +40,25 @@ func TestParseNextParams(t *testing.T) {
 	}
 	if params["json_restrictor"] != restrictor {
 		t.Errorf("expected json_restrictor=%q, got %q", restrictor, params["json_restrictor"])
+	}
+}
+
+func TestParseNextParamsCarriedParamsWin(t *testing.T) {
+	next := "https://serpapi.com/search.json?engine=google&q=coffee&start=10&output=html"
+	params, err := parseNextParams(next, map[string]string{"output": "json", "no_cache": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"engine": "google", "q": "coffee", "start": "10", "output": "json", "no_cache": "true"}
+	if canonicalParamsKey(params) != canonicalParamsKey(want) {
+		t.Errorf("got %v, want %v", params, want)
+	}
+}
+
+func TestParseNextParamsRejectsURLWithoutQuery(t *testing.T) {
+	for _, next := range []string{"", "https://serpapi.com/search.json", "%zz"} {
+		if _, err := parseNextParams(next, nil); err == nil {
+			t.Errorf("parseNextParams(%q) succeeded", next)
+		}
 	}
 }

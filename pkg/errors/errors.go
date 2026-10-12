@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"os"
 	"strings"
+
+	"github.com/serpapi/serpapi-cli/pkg/output"
 )
 
 // UsageError indicates incorrect CLI usage (exit code 2).
@@ -17,7 +19,11 @@ func (e *UsageError) Error() string { return "Usage error: " + e.Message }
 // APIError indicates an error returned by the SerpApi service (exit code 1).
 type APIError struct {
 	Message string
-	Cause   error
+	// Status is the HTTP status of the response: 200 when the API reported the
+	// error inside a successful response, 0 when there was no usable answer,
+	// such as a 200 with a body that is not JSON.
+	Status int
+	Cause  error
 }
 
 func (e *APIError) Error() string { return "API error: " + e.Message }
@@ -32,43 +38,35 @@ type NetworkError struct {
 func (e *NetworkError) Error() string { return "Network error: " + e.Message }
 func (e *NetworkError) Unwrap() error { return e.Cause }
 
+// InterruptedError means Ctrl-C or SIGTERM stopped the CLI (exit code 130).
+type InterruptedError struct{ Message string }
+
+func (e *InterruptedError) Error() string { return "Interrupted: " + e.Message }
+
 // ExitCode returns the appropriate process exit code for the given error.
 func ExitCode(err error) int {
-	var ue *UsageError
-	if errors.As(err, &ue) {
-		return 2
-	}
-	var ae *APIError
-	if errors.As(err, &ae) {
-		return 1
-	}
-	var ne *NetworkError
-	if errors.As(err, &ne) {
-		return 1
-	}
-	if isCobraUsageError(err) {
-		return 2
-	}
-	return 1
+	_, exit := classify(err)
+	return exit
 }
 
-func errorCode(err error) string {
+func classify(err error) (code string, exit int) {
 	var ue *UsageError
-	if errors.As(err, &ue) {
-		return "usage_error"
-	}
 	var ae *APIError
-	if errors.As(err, &ae) {
-		return "api_error"
-	}
 	var ne *NetworkError
-	if errors.As(err, &ne) {
-		return "network_error"
+	var ie *InterruptedError
+	switch {
+	case errors.As(err, &ie):
+		return "interrupted", 130
+	case errors.As(err, &ue):
+		return "usage_error", 2
+	case errors.As(err, &ae):
+		return "api_error", 1
+	case errors.As(err, &ne):
+		return "network_error", 1
+	case isCobraUsageError(err):
+		return "usage_error", 2
 	}
-	if isCobraUsageError(err) {
-		return "usage_error"
-	}
-	return "api_error"
+	return "api_error", 1
 }
 
 // isCobraUsageError detects cobra argument-validation errors by message pattern.
@@ -84,39 +82,61 @@ func isCobraUsageError(err error) bool {
 		strings.HasPrefix(msg, "invalid argument")
 }
 
-// PrintError writes a structured JSON error to stderr.
+// PrintError writes err to stderr; see FprintError.
 func PrintError(err error) {
-	code := errorCode(err)
-	message := RedactAPIKey(err.Error())
+	FprintError(os.Stderr, err)
+}
 
-	// Strip the "Usage error: " / "API error: " / "Network error: " prefix
-	// that the Error() method adds, so the JSON message stays clean.
-	switch e := err.(type) {
-	case *UsageError:
-		message = RedactAPIKey(e.Message)
-	case *APIError:
-		message = RedactAPIKey(e.Message)
-	case *NetworkError:
-		message = RedactAPIKey(e.Message)
+// FprintError writes err to w as one line of JSON:
+//
+//	{"error":{"code":"api_error","message":"...","status":429}}
+//
+// status is the HTTP status of the API's answer, 200 when a successful
+// response reported an error, and absent when there was no usable answer.
+func FprintError(w io.Writer, err error) {
+	code, _ := classify(err)
+	body := struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Status  int    `json:"status,omitempty"`
+	}{Code: code, Message: err.Error()}
+
+	var ue *UsageError
+	var ae *APIError
+	var ne *NetworkError
+	var ie *InterruptedError
+	switch {
+	case errors.As(err, &ie):
+		body.Message = ie.Message
+	case errors.As(err, &ue):
+		body.Message = ue.Message
+	case errors.As(err, &ae):
+		body.Message, body.Status = ae.Message, ae.Status
+	case errors.As(err, &ne):
+		body.Message = ne.Message
 	}
+	body.Message = RedactAPIKey(body.Message)
+	writeJSONLine(w, map[string]any{"error": body})
+}
 
-	payload := map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": message,
-		},
-	}
+// PrintWarning writes a non-fatal problem to w as one line of JSON, so stderr
+// stays parseable line by line:
+//
+//	{"warning":{"message":"..."}}
+func PrintWarning(w io.Writer, message string) {
+	writeJSONLine(w, map[string]any{"warning": map[string]string{"message": RedactAPIKey(message)}})
+}
 
+func writeJSONLine(w io.Writer, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if jsonErr := enc.Encode(payload); jsonErr != nil {
-		// Fallback if JSON encoding fails
-		fmt.Fprintf(os.Stderr, "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}\n",
-			code, strings.ReplaceAll(strings.ReplaceAll(message, "\\", "\\\\"), "\"", "\\\""))
-		return
+	_ = enc.Encode(v)
+	b := buf.Bytes()
+	if output.IsTerminal(w) {
+		b = output.ForTerminal(b)
 	}
-	fmt.Fprint(os.Stderr, buf.String())
+	_, _ = w.Write(b)
 }
 
 // RedactAPIKey replaces api_key values in s with [REDACTED].

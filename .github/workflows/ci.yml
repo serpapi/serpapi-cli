@@ -11,14 +11,23 @@ permissions: {}
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 1.25 is the minimum in go.mod for go install users; stable builds the releases.
+        go: ["1.25", stable]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go }}
+          check-latest: true
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          [ -z "$unformatted" ] || { echo "Run gofmt -w on: $unformatted"; exit 1; }
       - run: go vet ./...
       - run: go build ./cmd/serpapi
-      - run: go test ./pkg/...
+      - run: go test -race ./pkg/...
 
   e2e:
     runs-on: ubuntu-latest
@@ -27,12 +36,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
+      # Fork PRs get no secrets, so only the offline contract tests run there.
       - name: Run E2E tests
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-        run: go test ./tests/...
-      - name: Skip E2E (fork PR)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: echo "Skipping E2E tests - SERPAPI_KEY unavailable in fork PRs"
+        run: go test -v ./tests/...
