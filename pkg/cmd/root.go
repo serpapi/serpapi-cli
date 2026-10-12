@@ -171,6 +171,25 @@ func init() {
 
 	rootCmd.PersistentPreRunE = validateGlobalFlags
 
+	// cobra's help command prints the usage and exits 0 for an unknown topic.
+	rootCmd.SetHelpCommand(&cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		RunE: func(c *cobra.Command, args []string) error {
+			target, _, err := c.Root().Find(args)
+			if len(args) > 0 && (err != nil || target == c.Root()) {
+				msg := fmt.Sprintf("Unknown help topic %q", strings.Join(args, " "))
+				if s := c.Root().SuggestionsFor(args[0]); len(s) > 0 {
+					return &clierrors.UsageError{Message: msg + "; did you mean " + strings.Join(s, " or ") + "?"}
+				}
+				return &clierrors.UsageError{Message: msg + "; see 'serpapi --help'"}
+			}
+			target.InitDefaultHelpFlag()
+			target.InitDefaultVersionFlag()
+			return target.Help()
+		},
+	})
+
 	// Wrap cobra flag-parsing errors as UsageError so they get exit code 2.
 	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		return &clierrors.UsageError{Message: flagErrorHint(cmd, err.Error())}

@@ -712,11 +712,33 @@ func TestHelpAndVersionGoToStdout(t *testing.T) {
 	}{
 		{[]string{"--help"}, "SERPAPI_KEY"},
 		{[]string{"search", "--help"}, "--all-pages"},
+		{[]string{"help", "search"}, "--all-pages"},
 		{[]string{"--version"}, "serpapi version "},
 	} {
 		res := execute(t, "", tt.args...)
 		if res.code != 0 || res.stderr != "" || !strings.Contains(res.stdout, tt.want) {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q; want %q on stdout", tt.args, res.code, res.stdout, res.stderr, tt.want)
+		}
+	}
+}
+
+// A help topic that doesn't exist is a wrong command: exit 2 and one JSON
+// line, not the usage as plain text with exit 0.
+func TestHelpWithAnUnknownTopic(t *testing.T) {
+	fakeAPI(t, nil)
+
+	for topic, want := range map[string]string{
+		"serach": `Unknown help topic "serach"; did you mean search?`,
+		"nope":   `Unknown help topic "nope"; see 'serpapi --help'`,
+	} {
+		res := execute(t, "", "help", topic)
+
+		errObj := wantError(t, res, 2, "usage_error", want)
+		if errObj["message"] != want {
+			t.Errorf("help %s: message = %q, want %q", topic, errObj["message"], want)
+		}
+		if res.stdout != "" {
+			t.Errorf("help %s: stdout = %q, want empty", topic, res.stdout)
 		}
 	}
 }
