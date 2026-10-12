@@ -318,12 +318,13 @@ func handleOutput(cmd *cobra.Command, raw []byte, next func(id string) string) e
 	if err := dec.Decode(&v); err != nil {
 		return &clierrors.APIError{Message: "Failed to parse response: " + err.Error()}
 	}
-	return printJQ(cmd, v)
+	return printJQ(cmd.Context(), cmd, v)
 }
 
-// printJQ runs --jq on v and prints each result as it is produced. A filter
-// that prints only null gets a warning listing the keys v has.
-func printJQ(cmd *cobra.Command, v any) error {
+// printJQ runs --jq on v until ctx ends, printing each result as it is
+// produced. A filter that prints only null gets a warning listing the keys v
+// has.
+func printJQ(ctx context.Context, cmd *cobra.Command, v any) error {
 	code, err := jq.Compile(jqFlag)
 	if err != nil {
 		return &clierrors.UsageError{Message: err.Error()}
@@ -333,7 +334,6 @@ func printJQ(cmd *cobra.Command, v any) error {
 	bw := bufio.NewWriter(w)
 	var writeErr error
 	printed, nulls := 0, 0
-	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}

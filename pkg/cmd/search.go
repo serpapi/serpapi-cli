@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -290,7 +291,15 @@ func searchAllPages(cmd *cobra.Command, client *api.Client, first map[string]str
 		warnNothingMatched(cmd)
 	}
 
-	if err := printMerged(cmd, merged); err != nil {
+	// Pages fetched before Ctrl-C were billed, so --jq still runs on them, for
+	// at most interruptGrace; the process exits about then anyway.
+	printCtx := ctx
+	if pageErr != nil && ctx.Err() != nil {
+		var cancel context.CancelFunc
+		printCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), interruptGrace)
+		defer cancel()
+	}
+	if err := printMerged(printCtx, cmd, merged); err != nil {
 		return err
 	}
 	if pageErr == nil {
@@ -310,12 +319,12 @@ func searchAllPages(cmd *cobra.Command, client *api.Client, first map[string]str
 	return annotatePageError(pageErr, pages)
 }
 
-// printMerged prints the merged pages. --jq runs on them directly, and a
-// pipe gets them encoded as they are written, so no encoded copy of every
-// page is ever held in memory.
-func printMerged(cmd *cobra.Command, merged map[string]any) error {
+// printMerged prints the merged pages. --jq runs on them directly until ctx
+// ends, and a pipe gets them encoded as they are written, so no encoded copy
+// of every page is ever held in memory.
+func printMerged(ctx context.Context, cmd *cobra.Command, merged map[string]any) error {
 	if jqFlag != "" {
-		return printJQ(cmd, merged)
+		return printJQ(ctx, cmd, merged)
 	}
 	w := cmd.OutOrStdout()
 	if output.IsTerminal(w) {

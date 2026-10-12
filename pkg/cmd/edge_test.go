@@ -411,6 +411,58 @@ func TestInterruptDuringAllPagesPrintsFetchedPages(t *testing.T) {
 	}
 }
 
+// interruptAtPage3 serves pages 1 and 2 and cancels ctx once page 3 is asked
+// for, as Ctrl-C during a slow page would.
+func interruptAtPage3(t *testing.T, cancel context.CancelFunc) {
+	t.Helper()
+	reached := make(chan struct{})
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if n := pageNumber(r); n < 3 {
+			fmt.Fprint(w, page(n, true))
+			return
+		}
+		close(reached)
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+	go func() {
+		<-reached
+		cancel()
+	}()
+}
+
+// The pages fetched before Ctrl-C were billed, so --jq still runs on them.
+func TestInterruptDuringAllPagesWithJQPrintsFetchedPages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results | length")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while fetching page 3; pages 1-2 were printed")
+	if res.stdout != "2\n" {
+		t.Errorf("stdout = %q, want --jq's result on the 2 fetched pages", res.stdout)
+	}
+}
+
+// --jq on the fetched pages gets interruptGrace after the signal, no more.
+func TestInterruptDuringAllPagesBoundsAnEndlessJQ(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = 100 * time.Millisecond
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	start := time.Now()
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", "reduce range(1e12) as $i (0; . + 1)")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %v, want --jq stopped about interruptGrace after the signal", elapsed)
+	}
+}
+
 func TestInterruptBeforeTheResponse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
