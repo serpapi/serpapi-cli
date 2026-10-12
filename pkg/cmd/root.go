@@ -132,6 +132,16 @@ func exitTime(ctx context.Context) time.Time {
 	return time.Now().Add(interruptGrace)
 }
 
+// stopRunKey holds, in the command's context, the func that cancels it as a
+// signal does. login calls it for a Ctrl-C that raw mode turns into a key.
+type stopRunKey struct{}
+
+func stopRun(ctx context.Context) {
+	if stop, ok := ctx.Value(stopRunKey{}).(func()); ok {
+		stop()
+	}
+}
+
 // Execute runs the root command. The first Ctrl-C or SIGTERM cancels the
 // command's context so it can print what it has; a second one kills it.
 func Execute() {
@@ -146,7 +156,7 @@ func Execute() {
 	restoreDefault := func() { signal.Stop(sigs) }
 	done := make(chan struct{})
 	go exitAfterGrace(ctx, done, restoreDefault, rootCmd.ErrOrStderr(), os.Exit)
-	code := run(ctx)
+	code := run(context.WithValue(ctx, stopRunKey{}, stop))
 	close(done)
 	restoreDefault()
 	os.Exit(code)

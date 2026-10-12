@@ -121,8 +121,8 @@ func readAPIKey(cmd *cobra.Command) (string, error) {
 // readHidden reads a line from the terminal f without showing it. Raw mode is
 // set and undone here, not in the goroutine that reads, so a read that a
 // signal leaves running can't turn echo off again after it was restored. In
-// raw mode Ctrl-C is a key rather than a signal, and stops the read the same
-// way; Ctrl-D gives no key.
+// raw mode Ctrl-C is a key rather than a signal; it stops the run as the
+// signal would, even after Enter in the same read. Ctrl-D gives no key.
 func readHidden(ctx context.Context, f *os.File, stderr io.Writer, stopped string) (string, error) {
 	fd := int(f.Fd())
 	state, err := term.MakeRaw(fd)
@@ -136,6 +136,10 @@ func readHidden(ctx context.Context, f *os.File, stderr io.Writer, stopped strin
 	}{in, stderr}, "")
 	line, err := readInterruptibly(ctx, func() (string, error) { return t.ReadPassword("") }, stopped)
 	_ = term.Restore(fd, state)
+	if !isInterrupted(err) && in.ctrlC {
+		stopRun(ctx)
+		err = &clierrors.InterruptedError{Message: stopped}
+	}
 	if errors.Is(err, term.ErrPasteIndicator) {
 		err = nil
 	}
@@ -147,8 +151,6 @@ func readHidden(ctx context.Context, f *os.File, stderr io.Writer, stopped strin
 		return line, nil
 	case isInterrupted(err):
 		return "", err
-	case errors.Is(err, io.EOF) && in.ctrlC:
-		return "", &clierrors.InterruptedError{Message: stopped}
 	case errors.Is(err, io.EOF):
 		return "", nil
 	}
