@@ -1,6 +1,6 @@
 # serpapi-cli
 
-> HTTP client for structured web search data via SerpApi
+HTTP client for structured web search data via SerpApi
 
 ## Installation
 
@@ -11,7 +11,7 @@ brew tap serpapi/homebrew-tap
 brew install serpapi-cli
 ```
 
-### Pre-built Binaries
+### Pre-built binaries
 
 Download directly from [GitHub Releases](https://github.com/serpapi/serpapi-cli/releases)
 
@@ -21,7 +21,7 @@ Download directly from [GitHub Releases](https://github.com/serpapi/serpapi-cli/
 go install github.com/serpapi/serpapi-cli/cmd/serpapi@latest
 ```
 
-## Quick Start
+## Quick start
 
 ```bash
 # Authenticate
@@ -57,7 +57,7 @@ serpapi search --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=googl
 serpapi search --fields "organic_results" --jq ".organic_results[0:3] | [.[] | {title, link}]" engine=google q=coffee
 ```
 
-#### Pagination Flags
+#### Pagination flags
 
 - `--all-pages` — Fetch all result pages and merge array fields across pages
 - `--max-pages <n>` — Maximum number of pages to fetch when using `--all-pages`
@@ -103,7 +103,7 @@ Interactive authentication flow to save API key to config file.
 serpapi login
 ```
 
-## Global Flags
+## Global flags
 
 - `--fields <expr>` — Server-side field filtering (maps to SerpApi's `json_restrictor` parameter). Note: The `--fields` filter uses SerpApi's server-side field restrictor syntax—see [SerpApi docs](https://serpapi.com) for supported expressions.
 - `--jq <expr>` — Client-side [jq](https://jqlang.github.io/jq/) filter applied to the JSON response, same as `gh --jq` (see the [jq tutorial](https://jqlang.github.io/jq/tutorial/) for syntax). Runs locally after the API call; the jq engine is embedded so no external `jq` install is required. Use `--fields` to shrink the payload server-side, then `--jq` to reshape it client-side. Examples:
@@ -130,7 +130,7 @@ serpapi login
 
 ## Configuration
 
-### Authentication Priority Chain
+### Authentication priority chain
 
 The CLI checks for API keys in this order:
 
@@ -143,13 +143,13 @@ If no API key is found, run `serpapi login` to authenticate interactively.
 > **Security note:** For security, prefer setting `SERPAPI_KEY` as an environment variable over
 > passing `--api-key` on the command line (command-line arguments are visible in process listings).
 
-### Config File Format
+### Config file format
 
 ```toml
 api_key = "your_serpapi_key_here"
 ```
 
-## For AI Agents
+## For AI agents
 
 This CLI is optimized for consumption by AI agents (Claude, Codex, etc.):
 
