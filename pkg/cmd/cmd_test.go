@@ -714,6 +714,7 @@ func TestHelpAndVersionGoToStdout(t *testing.T) {
 		{[]string{"search", "--help"}, "--all-pages"},
 		{[]string{"help", "search"}, "--all-pages"},
 		{[]string{"--version"}, "serpapi version "},
+		{[]string{"help", "help"}, "Help provides help for any command"},
 	} {
 		res := execute(t, "", tt.args...)
 		if res.code != 0 || res.stderr != "" || !strings.Contains(res.stdout, tt.want) {
@@ -740,5 +741,16 @@ func TestHelpWithAnUnknownTopic(t *testing.T) {
 		if res.stdout != "" {
 			t.Errorf("help %s: stdout = %q, want empty", topic, res.stdout)
 		}
+	}
+}
+
+// The help command still completes command names, and only them.
+func TestHelpCompletesCommands(t *testing.T) {
+	fakeAPI(t, nil)
+
+	res := execute(t, "", "__complete", "help", "se")
+
+	if res.code != 0 || !strings.HasPrefix(res.stdout, "search\t") || !strings.Contains(res.stdout, "\n:4\n") {
+		t.Errorf("exit %d, stdout %q; want search and directive 4 (no file completion)", res.code, res.stdout)
 	}
 }

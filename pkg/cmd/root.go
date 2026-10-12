@@ -148,6 +148,7 @@ func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stde
 // run executes the root command, reports any error on its stderr as JSON and
 // returns the exit code. A command stopped by canceling ctx exits 130.
 func run(ctx context.Context) int {
+	initHelpCommand()
 	err := rootCmd.ExecuteContext(ctx)
 	if err == nil {
 		return 0
@@ -160,6 +161,30 @@ func run(ctx context.Context) int {
 	return clierrors.ExitCode(err)
 }
 
+// initHelpCommand keeps cobra's help command, with its text and completion,
+// but makes an unknown topic a usage error; cobra prints the usage and exits 0.
+// It runs once every command has been added, which cobra needs.
+func initHelpCommand() {
+	rootCmd.InitDefaultHelpCmd()
+	if help, _, err := rootCmd.Find([]string{"help"}); err == nil && help != rootCmd {
+		help.RunE = runHelp
+	}
+}
+
+func runHelp(c *cobra.Command, args []string) error {
+	target, _, err := c.Root().Find(args)
+	if len(args) > 0 && (err != nil || target == c.Root()) {
+		msg := fmt.Sprintf("Unknown help topic %q", strings.Join(args, " "))
+		if s := c.Root().SuggestionsFor(args[0]); len(s) > 0 {
+			return &clierrors.UsageError{Message: msg + "; did you mean " + strings.Join(s, " or ") + "?"}
+		}
+		return &clierrors.UsageError{Message: msg + "; see 'serpapi --help'"}
+	}
+	target.InitDefaultHelpFlag()
+	target.InitDefaultVersionFlag()
+	return target.Help()
+}
+
 func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&apiKeyFlag, "api-key", "", "SerpApi API key; prefer SERPAPI_KEY, since flags show up in ps and shell history")
@@ -170,25 +195,6 @@ func init() {
 		int(api.DefaultTimeout/time.Second)))
 
 	rootCmd.PersistentPreRunE = validateGlobalFlags
-
-	// cobra's help command prints the usage and exits 0 for an unknown topic.
-	rootCmd.SetHelpCommand(&cobra.Command{
-		Use:   "help [command]",
-		Short: "Help about any command",
-		RunE: func(c *cobra.Command, args []string) error {
-			target, _, err := c.Root().Find(args)
-			if len(args) > 0 && (err != nil || target == c.Root()) {
-				msg := fmt.Sprintf("Unknown help topic %q", strings.Join(args, " "))
-				if s := c.Root().SuggestionsFor(args[0]); len(s) > 0 {
-					return &clierrors.UsageError{Message: msg + "; did you mean " + strings.Join(s, " or ") + "?"}
-				}
-				return &clierrors.UsageError{Message: msg + "; see 'serpapi --help'"}
-			}
-			target.InitDefaultHelpFlag()
-			target.InitDefaultVersionFlag()
-			return target.Help()
-		},
-	})
 
 	// Wrap cobra flag-parsing errors as UsageError so they get exit code 2.
 	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
