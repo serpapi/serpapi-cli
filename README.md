@@ -21,7 +21,11 @@ Download directly from [GitHub Releases](https://github.com/serpapi/serpapi-cli/
 go install github.com/serpapi/serpapi-cli/cmd/serpapi@latest
 ```
 
+This needs Go 1.25 or newer; with the default `GOTOOLCHAIN=auto`, Go 1.21 and later download it on their own.
+
 ## Quick Start
+
+Your API key is at <https://serpapi.com/manage-api-key>. Without one, `search` still answers a few demo queries such as `q=coffee`.
 
 ```bash
 serpapi login                                    # check and save your API key
