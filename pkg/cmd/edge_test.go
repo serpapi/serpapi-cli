@@ -64,6 +64,13 @@ func searchWith(args ...string) []string { return append(append([]string{}, sear
 func edgeCases() []edgeCase {
 	invalidKey := `{"error":"Invalid API key. Your API key should be here: https://serpapi.com/manage-api-key"}`
 	pages := func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page(pageNumber(r), pageNumber(r) < 3)) }
+	bigPages := func(w http.ResponseWriter, r *http.Request) {
+		next := ""
+		if pageNumber(r) == 1 {
+			next = `"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=10"},`
+		}
+		fmt.Fprint(w, bigResult(next+`"inline_images":[{"position":1}],`, 700))
+	}
 	return []edgeCase{
 		{name: "argv/no parameters", args: []string{"search"}, exit: 2, code: "usage_error", msg: "No search parameters given"},
 		{name: "argv/q and bare words", args: searchWith("tea"), exit: 2, code: "usage_error", msg: "Got both q=... and bare words"},
@@ -202,17 +209,16 @@ func edgeCases() []edgeCase {
 			warn: "keys by size: organic_results 52 KB, search_metadata 24 B. To print only what you need, read the stored search for free: serpapi archive abc123 --jq '.KEY'"},
 		{name: "output/large result without an id", args: search, api: respond(bigResult("", 1500)),
 			warn: "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"},
+		{name: "output/large no_cache result promises no cache hit", args: searchWith("no_cache=true"), api: respond(bigResult("", 1500)),
+			warn: "repeat the command with --jq '.KEY'; no_cache=true makes the repeat a new, counted search"},
 		{name: "output/large result with --jq is quiet", args: searchWith("--jq", ".organic_results | length"),
 			api: respond(bigResult("", 1500)), stdout: "1500\n", quiet: true},
 		{name: "output/large result with --fields still hints", args: searchWith("--fields", "organic_results"),
 			api: respond(bigResult("", 1500)), warn: "Large result: 52 KB"},
-		{name: "output/large merged pages", args: searchWith("--all-pages"), reqs: 2, api: func(w http.ResponseWriter, r *http.Request) {
-			next := ""
-			if pageNumber(r) == 1 {
-				next = `"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=10"},`
-			}
-			fmt.Fprint(w, bigResult(next+`"inline_images":[{"position":1}],`, 700))
-		}, warn: "Large result: 48 KB; top-level keys by size: organic_results 48 KB, inline_images 70 B. To print only what you need, repeat the command"},
+		{name: "output/large merged pages", args: searchWith("--all-pages"), reqs: 2, api: bigPages,
+			warn: "Large result: 48 KB; top-level keys by size: organic_results 48 KB, inline_images 70 B. To print only what you need, repeat the command"},
+		{name: "output/large no_cache merged pages", args: searchWith("no_cache=true", "--all-pages"), reqs: 2, api: bigPages,
+			warn: "no_cache=true makes the repeat a new, counted search for each page"},
 		{name: "output/large archive", args: []string{"archive", "abc123"}, api: respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
 			warn: "add --jq '.KEY'; reading the archive is free"},
 		{name: "output/jq printing only null lists the keys", args: searchWith("--jq", ".organic"), api: oneResult, stdout: "\n",

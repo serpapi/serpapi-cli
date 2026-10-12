@@ -112,13 +112,23 @@ func warnRepeated(cmd *cobra.Command, parsed []params.Param) {
 // archiveHint is the next step for a large stored search.
 func archiveHint(string) string { return "add --jq '.KEY'; reading the archive is free" }
 
-// searchHint is the next step for a large search result: re-reading the
-// stored search is free, and so is the same search within the cache hour.
-func searchHint(id string) string {
-	if id != "" {
-		return fmt.Sprintf("read the stored search for free: serpapi archive %s --jq '.KEY'", id)
+// searchHint returns the next step for a large result of the search sent
+// with p: re-reading the stored search is free, and so is the same search
+// within the cache hour, unless no_cache asked for a new one.
+func searchHint(p map[string]string) func(id string) string {
+	return func(id string) string {
+		if id != "" {
+			return fmt.Sprintf("read the stored search for free: serpapi archive %s --jq '.KEY'", id)
+		}
+		if v := p["no_cache"]; v != "" && v != "false" && v != "0" {
+			hint := "repeat the command with --jq '.KEY'; no_cache=" + v + " makes the repeat a new, counted search"
+			if allPagesFlag {
+				hint += " for each page"
+			}
+			return hint
+		}
+		return "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"
 	}
-	return "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"
 }
 
 func sizeText(n int) string {
