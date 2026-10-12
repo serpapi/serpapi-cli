@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/serpapi/serpapi-cli/pkg/api"
 	"github.com/serpapi/serpapi-cli/pkg/config"
+	"github.com/serpapi/serpapi-cli/pkg/output"
 )
 
 type result struct {
@@ -622,7 +624,36 @@ func TestAccountEmailIsSafeOnATerminal(t *testing.T) {
 	}
 }
 
-func TestNoCommandPrintsHelpToStderr(t *testing.T) {
+// Off a terminal, stderr carries only JSON lines, so a script reading it line
+// by line gets the error and nothing else.
+func TestNoCommandOffATerminalPrintsOnlyTheError(t *testing.T) {
+	fakeAPI(t, nil)
+
+	res := execute(t, "")
+
+	if res.code != 2 {
+		t.Fatalf("exit code = %d, want 2", res.code)
+	}
+	if res.stdout != "" {
+		t.Errorf("stdout = %q, want empty", res.stdout)
+	}
+	dec := json.NewDecoder(strings.NewReader(res.stderr))
+	var got struct{ Error map[string]any }
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("stderr = %q, want a JSON error line first: %v", res.stderr, err)
+	}
+	if got.Error["code"] != "usage_error" || got.Error["message"] != "No command given; see 'serpapi --help'" {
+		t.Errorf("error = %v", got.Error)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		t.Errorf("stderr = %q, want nothing after the error line", res.stderr)
+	}
+}
+
+func TestNoCommandOnATerminalPrintsUsage(t *testing.T) {
+	isTerminal := output.IsTerminal
+	output.IsTerminal = func(io.Writer) bool { return true }
+	t.Cleanup(func() { output.IsTerminal = isTerminal })
 	fakeAPI(t, nil)
 
 	res := execute(t, "")

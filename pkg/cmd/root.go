@@ -98,8 +98,11 @@ are free.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.SetOut(cmd.ErrOrStderr())
-		_ = cmd.Help()
+		// Off a terminal, stderr carries only JSON lines; the error names --help.
+		if output.IsTerminal(cmd.ErrOrStderr()) {
+			cmd.SetOut(cmd.ErrOrStderr())
+			_ = cmd.Help()
+		}
 		return &clierrors.UsageError{Message: "No command given; see 'serpapi --help'"}
 	},
 }
