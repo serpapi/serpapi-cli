@@ -176,7 +176,7 @@ const searchMetadataTimeLayout = "2006-01-02 15:04:05 MST"
 
 // logSearchMetadata correlates the server-side search_metadata timestamps
 // with the client-side timeline so a stall can be attributed to one of:
-//   - before the server created the search (network, edge, queueing)
+//   - before the request reached the server (DNS, VPN, proxy, network path)
 //   - server processing (created_at -> processed_at)
 //   - after processing finished but before headers were sent
 //
@@ -227,9 +227,9 @@ func (t *tracer) logSearchMetadata(body []byte) {
 	}
 	switch {
 	case createdAt.Sub(sentAt) > slack:
-		t.logf("Note: most of the wait (%s) happened before the server created the search; suspect network path, proxy, or server-side queueing rather than the search engine", signedSeconds(createdAt.Sub(sentAt)))
+		t.logf("Note: most of the wait (%s) happened before the request reached SerpApi; check the network path (DNS, VPN, proxy, connectivity)", signedSeconds(createdAt.Sub(sentAt)))
 	case firstByteAt.Sub(processedAt) > slack:
-		t.logf("Note: the server finished processing %s before headers arrived; suspect response delivery path", signedSeconds(firstByteAt.Sub(processedAt)))
+		t.logf("Note: the response took %s to arrive after SerpApi finished processing; check the network path back to this machine", signedSeconds(firstByteAt.Sub(processedAt)))
 	}
 }
 

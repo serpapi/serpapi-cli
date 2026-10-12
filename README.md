@@ -111,17 +111,17 @@ Prints the CLI version, as `--version` does.
 - `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
 - `--fields <expr>`: search only; see [search](#search).
 - `--api-key <key>`: API key. Prefer `SERPAPI_KEY`, since flags show up in `ps` and shell history.
-- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
+- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Raise it when a `network_error` says the request timed out and you are on a slow or unstable network path (VPN, proxy, high-latency connection); `--debug` shows where the time went. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
   ```bash
-  # Give an AI Mode query up to two minutes
-  serpapi search --timeout 120 engine=google_ai_mode q="..."
+  # Allow up to two minutes for a single request
+  serpapi search --timeout 120 engine=google q="..."
 
   # Or set it once for the shell session
   export SERPAPI_TIMEOUT=120
   ```
-- `--debug`: trace each request on stderr (env `SERPAPI_DEBUG=1`): DNS, TCP connect (local and remote address), TLS handshake, time to first byte, response status and headers (including `Serpapi-Search-Id` and `X-Request-Id`), body size, and, for searches, the server's `search_metadata` timeline correlated with the client's, so you can see whether a long wait happened before SerpApi created the search (network path, proxy, queueing), during processing (slow engine), or after processing finished. Each line carries a UTC timestamp and the seconds elapsed since the request started; the API key is redacted; stdout is untouched, so `--jq` and piping still work.
+- `--debug`: trace each request on stderr (env `SERPAPI_DEBUG=1`): DNS, TCP connect (local and remote address), TLS handshake, time to first byte, response status and headers (including `Serpapi-Search-Id` and `X-Request-Id`), body size, and, for searches, the server's `search_metadata` timeline correlated with the client's, so you can see whether a long wait happened on the network path before SerpApi received the request, during processing, or while the response travelled back. Each line carries a UTC timestamp and the seconds elapsed since the request started; the API key is redacted; stdout is untouched, so `--jq` and piping still work.
   ```bash
-  serpapi search --debug engine=google_ai_mode q="..." > result.json
+  serpapi search --debug engine=google q="..." > result.json
   ```
   ```
   [debug] 2026-10-09T11:50:54.272Z + 0.000s GET https://serpapi.com/search.json?api_key=[REDACTED]&engine=google&q=coffee

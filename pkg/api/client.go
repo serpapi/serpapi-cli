@@ -23,9 +23,9 @@ const (
 	// DefaultBaseURL is the SerpApi production endpoint.
 	DefaultBaseURL = "https://serpapi.com"
 	// DefaultTimeout bounds one HTTP request, including reading the response
-	// body. It matches the 60s default of the official serpapi-golang library.
-	// Slow engines such as google_ai_mode can take longer with no_cache=true,
-	// and SerpApi still finishes and counts a search the client gave up on.
+	// body. It matches the 60s default of the official serpapi-golang library
+	// and leaves headroom for slow or unreliable network paths. SerpApi still
+	// finishes and counts a search the client gave up on.
 	DefaultTimeout = 60 * time.Second
 )
 
@@ -152,8 +152,8 @@ func (c *Client) networkError(endpoint string, err error) error {
 	var netErr net.Error
 	if c.http.Timeout > 0 && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())) {
 		return &clierrors.NetworkError{
-			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
-				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely, or run with --debug to see where time was spent. "+
+			Message: fmt.Sprintf("Request to %s timed out after %s. This usually points to a slow or unstable network path (VPN, proxy, or connectivity issues): "+
+				"run with --debug to see where time was spent, or retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely. "+
 				"The search may still finish on SerpApi's side, count against your searches and be available in your search archive",
 				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout)),
 			Cause: cause,

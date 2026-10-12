@@ -333,7 +333,7 @@ func TestNewUsesDefaultTimeout(t *testing.T) {
 		t.Fatalf("expected default timeout %s, got %s", DefaultTimeout, got)
 	}
 	if DefaultTimeout < 60*time.Second {
-		t.Fatalf("default timeout %s is too short for slow engines like google_ai_mode", DefaultTimeout)
+		t.Fatalf("default timeout %s is shorter than the 60s used by the official serpapi-golang library", DefaultTimeout)
 	}
 }
 
@@ -412,8 +412,8 @@ func TestOSTimeoutWithoutAClientLimit(t *testing.T) {
 // The advice names a --timeout above the one that just ran out.
 func TestTimeoutAdviceRaisesTheLimit(t *testing.T) {
 	for limit, want := range map[time.Duration]string{
-		50 * time.Millisecond: "timed out after 50ms. Slow engines, such as google_ai_mode, and no_cache=true can take longer: retry with a higher --timeout, such as --timeout 120,",
-		60 * time.Second:      "timed out after 60s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: retry with a higher --timeout, such as --timeout 120,",
+		50 * time.Millisecond: "timed out after 50ms. This usually points to a slow or unstable network path (VPN, proxy, or connectivity issues): run with --debug to see where time was spent, or retry with a higher --timeout, such as --timeout 120,",
+		60 * time.Second:      "timed out after 60s. This usually points to a slow or unstable network path (VPN, proxy, or connectivity issues): run with --debug to see where time was spent, or retry with a higher --timeout, such as --timeout 120,",
 		120 * time.Second:     "--timeout 240,",
 		301 * time.Second:     "--timeout 602,",
 	} {

@@ -159,7 +159,7 @@ func TestDebugFlagsStallBeforeSearchCreation(t *testing.T) {
 	if !strings.Contains(out, "(+9.0s processing)") {
 		t.Errorf("expected 9s processing:\n%s", out)
 	}
-	if !strings.Contains(out, "Note: most of the wait (+21.0s) happened before the server created the search") {
+	if !strings.Contains(out, "Note: most of the wait (+21.0s) happened before the request reached SerpApi") {
 		t.Errorf("expected pre-creation stall note:\n%s", out)
 	}
 }
@@ -173,19 +173,19 @@ func TestDebugFlagsStallAfterProcessing(t *testing.T) {
 	if !strings.Contains(out, "headers received +15.0s after processed_at") {
 		t.Errorf("expected 15s post-processing gap:\n%s", out)
 	}
-	if !strings.Contains(out, "Note: the server finished processing +15.0s before headers arrived") {
+	if !strings.Contains(out, "Note: the response took +15.0s to arrive after SerpApi finished processing") {
 		t.Errorf("expected post-processing stall note:\n%s", out)
 	}
 }
 
 func TestDebugNoStallNoteWhenServerProcessingDominates(t *testing.T) {
 	var buf bytes.Buffer
-	// Slow, but honestly slow: the engine took 40s and that's all we waited.
+	// Long, but legitimately so: processing took 40s and that's all we waited.
 	tr, body := stallTracer(&buf, 0, 40*time.Second, 500*time.Millisecond)
 	tr.logSearchMetadata(body)
 
 	if strings.Contains(buf.String(), "Note:") {
-		t.Errorf("slow engine should not be flagged as a client/network stall:\n%s", buf.String())
+		t.Errorf("long server processing should not be flagged as a client/network stall:\n%s", buf.String())
 	}
 }
 
