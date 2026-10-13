@@ -26,12 +26,12 @@ on:
 permissions: {}
 
 jobs:
-  goreleaser:
+  # One job builds, uploads and updates Homebrew while holding the lock, so
+  # releases from CI, a tag push or a dispatch never interleave.
+  publish:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Publishing waits for any other release, from CI, a tag push or a
-    # dispatch, so their uploads and Homebrew pushes never interleave.
     concurrency:
       group: release-publish
       cancel-in-progress: false
@@ -50,7 +50,7 @@ jobs:
           fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
       - name: Check what the tag points at
         run: |
@@ -59,6 +59,10 @@ jobs:
             exit 1
           fi
           at=$(git rev-parse "$TAG^{commit}")
+          if [ "$(git rev-parse HEAD)" != "$at" ]; then
+            echo "::error::checked out $(git rev-parse HEAD), not $TAG at $at"
+            exit 1
+          fi
           if [ -n "$SHA" ] && [ "$at" != "$SHA" ]; then
             echo "::error::$TAG points at $at, not at the tested $SHA"
             exit 1
@@ -68,25 +72,25 @@ jobs:
             echo "::error::$newest is newer than $TAG; releasing $TAG would mark it latest and point Homebrew back at it"
             exit 1
           fi
-      # A complete release is never built again: a newer Go would change the
-      # binaries users already have under that version. A partial one, from a
-      # failed upload, needs its assets deleted first.
+      # A published version is never built again: a newer Go would change
+      # binaries users may already have. A complete release only gets its
+      # Homebrew formula refreshed; a partial one is left for a fix forward.
       - id: existing
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            exit 0
+          if ! assets=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[].name' 2>&1); then
+            if grep -q 'HTTP 404' <<<"$assets"; then exit 0; fi
+            echo "::error::Couldn't check for a $TAG release: $assets"
+            exit 1
           fi
-          sums=$(gh release download "$TAG" --pattern 'serpapi_*_checksums.txt' --output - 2>/dev/null || true)
-          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          sums=$(gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'serpapi_*_checksums.txt' --output - 2>/dev/null || true)
           missing=$(awk '{print $2}' <<<"$sums" | grep -vxF -e "$assets" || true)
           if [ -n "$sums" ] && [ -z "$missing" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::$TAG is already released with every file in its checksums; not building it again"
+            echo "::notice::$TAG is already released with every file in its checksums; only Homebrew is refreshed"
           else
-            echo "::error::$TAG has an incomplete release; delete its assets with gh release delete-asset, then run this again"
+            echo "::error::$TAG has an incomplete release, which is never rebuilt; release the next version instead (Actions, CI, Run workflow on main with bump patch)"
             exit 1
           fi
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -111,17 +115,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ env.TAG }}
 
-  homebrew:
-    runs-on: ubuntu-latest
-    needs: goreleaser
-    concurrency:
-      group: release-publish
-      cancel-in-progress: false
-      queue: max
-    steps:
       - name: Update Homebrew formula
         env:
-          TAG: ${{ inputs.tag || github.ref_name }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           VERSION="${TAG#v}"
