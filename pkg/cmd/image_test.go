@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const imageKey = "image_test_key"
@@ -163,5 +165,22 @@ func TestImageRefusesEmptyAndOversizedImagesUnsent(t *testing.T) {
 			res := execute(t, tc.stdin, append([]string{"--api-key", imageKey}, tc.args(t)...)...)
 			wantError(t, res, 2, "usage_error", tc.msg)
 		})
+	}
+}
+
+func TestImageStopsAtOnceWhenInterruptedOnStdin(t *testing.T) {
+	fakeAPI(t, nil)
+	stdin, writer := io.Pipe()
+	t.Cleanup(func() { writer.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	res := executeInput(t, ctx, stdin, "--api-key", imageKey, "image", "-")
+
+	wantError(t, res, 130, "interrupted", "Stopped while reading the image from stdin; nothing was uploaded")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("image took %v to stop, want well under the %v grace period", elapsed, interruptGrace)
 	}
 }

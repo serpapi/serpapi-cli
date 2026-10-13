@@ -52,8 +52,13 @@ func uploadImage(cmd *cobra.Command, client *api.Client, path string) (json.RawM
 	ctx := cmd.Context()
 	var content []byte
 	if path == "-" {
+		in := cmd.InOrStdin()
 		var err error
-		content, err = api.ReadImage(cmd.InOrStdin())
+		content, err = readInterruptibly(ctx, func() ([]byte, error) { return api.ReadImage(in) },
+			"Stopped while reading the image from stdin; nothing was uploaded")
+		if isInterrupted(err) {
+			return nil, err
+		}
 		if err != nil {
 			return nil, &clierrors.UsageError{Message: "Cannot read image from stdin: " + err.Error()}
 		}
