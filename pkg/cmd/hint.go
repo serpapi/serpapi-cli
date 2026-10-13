@@ -126,10 +126,10 @@ func searchHint(p map[string]string) func(id string) string {
 		switch {
 		case zeroTrace == paramOn:
 			hint += "; zero_trace=" + p["zero_trace"] + " stores nothing and makes the repeat a new, counted search"
-		case zeroTrace == paramUnsure:
-			hint += "; with zero_trace=" + p["zero_trace"] + " the repeat may be a new, counted search"
 		case noCache == paramOn:
 			hint += "; no_cache=" + p["no_cache"] + " makes the repeat a new, counted search"
+		case zeroTrace == paramUnsure:
+			hint += "; with zero_trace=" + p["zero_trace"] + " the repeat may be a new, counted search"
 		case noCache == paramUnsure:
 			hint += "; with no_cache=" + p["no_cache"] + " the repeat may be a new, counted search"
 		default:
