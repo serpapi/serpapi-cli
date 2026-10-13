@@ -3,8 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +172,58 @@ func TestDebugTimeoutErrorStaysLastJSONLine(t *testing.T) {
 	}
 	if !strings.Contains(res.stderr, "Request failed:") {
 		t.Errorf("trace should report the failed request:\n%s", res.stderr)
+	}
+}
+
+// TestDebugTraceNeverPrintsTheKey covers responses that carry the key back:
+// redirects the client refuses to follow, since the request URL carries it,
+// one echoing the query and a proxy's login page with the original URL
+// encoded in its own, and a header named after it.
+func TestDebugTraceNeverPrintsTheKey(t *testing.T) {
+	key := strings.Repeat("0123456789abcdef", 4)
+	responses := []struct {
+		name    string
+		headers func(r *http.Request) map[string]string
+	}{
+		{"echoed query", func(r *http.Request) map[string]string {
+			return map[string]string{"Location": "https://serpapi.com/search.json?" + r.URL.RawQuery}
+		}},
+		{"encoded in a login URL", func(r *http.Request) map[string]string {
+			return map[string]string{"Location": "https://proxy.example/login?origurl=" + url.QueryEscape("https://serpapi.com"+r.URL.RequestURI())}
+		}},
+		{"a header named after it", func(*http.Request) map[string]string { return map[string]string{"X-Echo-" + key: "1"} }},
+	}
+	for _, response := range responses {
+		for _, terminal := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/terminal=%v", response.name, terminal), func(t *testing.T) {
+				fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+					for name, value := range response.headers(r) {
+						w.Header().Set(name, value)
+					}
+					w.WriteHeader(http.StatusFound)
+				})
+				isTerminal := output.IsTerminal
+				output.IsTerminal = func(io.Writer) bool { return terminal }
+				t.Cleanup(func() { output.IsTerminal = isTerminal })
+
+				res := execute(t, "", "--api-key", key, "--debug", "search", "engine=google", "q=coffee")
+
+				if res.code != 1 {
+					t.Fatalf("exit code = %d, want 1; stderr: %s", res.code, res.stderr)
+				}
+				if n := strings.Count(res.stderr, key); n > 0 {
+					t.Errorf("stderr prints the API key %d times:\n%s", n, res.stderr)
+				}
+				if !strings.Contains(res.stderr, "Response: HTTP/1.1 302 Found") {
+					t.Errorf("trace should still show the response:\n%s", res.stderr)
+				}
+				for _, line := range strings.Split(strings.TrimSpace(res.stderr), "\n") {
+					if !terminal && !json.Valid([]byte(line)) {
+						t.Errorf("piped stderr line is not JSON: %q", line)
+					}
+				}
+			})
+		}
 	}
 }
 

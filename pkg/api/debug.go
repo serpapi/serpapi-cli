@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ type debugEvent struct {
 type tracer struct {
 	w     io.Writer
 	json  bool
+	key   string
 	start time.Time
 	mu    sync.Mutex
 
@@ -54,7 +56,7 @@ func (c *Client) newTracer() *tracer {
 	if c.debug == nil {
 		return nil
 	}
-	return &tracer{w: c.debug, json: c.debugJSON, start: time.Now()}
+	return &tracer{w: c.debug, json: c.debugJSON, key: c.apiKey, start: time.Now()}
 }
 
 // logf writes one event with no structured data.
@@ -64,8 +66,8 @@ func (t *tracer) logf(format string, args ...any) {
 
 // log writes one event: wall-clock UTC time (to correlate with server-side
 // created_at/processed_at), seconds since the request started, and the
-// message with any api_key value redacted. data, if not nil, is included in
-// the JSON form only.
+// message, with the API key redacted from it and from data. data, if not nil,
+// is included in the JSON form only.
 func (t *tracer) log(data map[string]any, format string, args ...any) {
 	if t == nil {
 		return
@@ -73,7 +75,19 @@ func (t *tracer) log(data map[string]any, format string, args ...any) {
 	now := time.Now()
 	at := now.UTC().Format("2006-01-02T15:04:05.000Z")
 	elapsed := now.Sub(t.start).Seconds()
-	msg := clierrors.RedactAPIKey(fmt.Sprintf(format, args...))
+	msg := t.redact(fmt.Sprintf(format, args...))
+	for k, v := range data {
+		switch v := v.(type) {
+		case string:
+			data[k] = t.redact(v)
+		case map[string]string:
+			redacted := make(map[string]string, len(v))
+			for name, value := range v {
+				redacted[t.redact(name)] = t.redact(value)
+			}
+			data[k] = redacted
+		}
+	}
 
 	var line []byte
 	if t.json {
@@ -89,6 +103,16 @@ func (t *tracer) log(data map[string]any, format string, args ...any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_, _ = t.w.Write(line)
+}
+
+// redact replaces api_key values in s, and the key itself, plain or
+// URL-encoded: a header such as a redirect's Location can carry it anywhere.
+func (t *tracer) redact(s string) string {
+	s = clierrors.RedactAPIKey(s)
+	if t.key == "" {
+		return s
+	}
+	return strings.NewReplacer(t.key, "[REDACTED]", url.QueryEscape(t.key), "[REDACTED]").Replace(s)
 }
 
 func round3(f float64) float64 {
