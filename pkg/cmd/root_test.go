@@ -167,8 +167,8 @@ func TestDebugTimeoutErrorStaysLastJSONLine(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil || last.Error == nil {
 		t.Fatalf("last stderr line should be the JSON error, got %q", lines[len(lines)-1])
 	}
-	if msg, _ := last.Error["message"].(string); !strings.Contains(msg, "--debug") || !strings.Contains(msg, "timed out") {
-		t.Errorf("timeout message should mention --debug: %q", msg)
+	if msg, _ := last.Error["message"].(string); strings.Contains(msg, "--debug") || !strings.Contains(msg, "timed out") {
+		t.Errorf("with --debug on, the timeout message shouldn't suggest it: %q", msg)
 	}
 	if !strings.Contains(res.stderr, "Request failed:") {
 		t.Errorf("trace should report the failed request:\n%s", res.stderr)

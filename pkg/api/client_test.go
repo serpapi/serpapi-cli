@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -333,7 +334,7 @@ func TestNewUsesDefaultTimeout(t *testing.T) {
 		t.Fatalf("expected default timeout %s, got %s", DefaultTimeout, got)
 	}
 	if DefaultTimeout < 60*time.Second {
-		t.Fatalf("default timeout %s is shorter than the 60s used by the official serpapi-golang library", DefaultTimeout)
+		t.Fatalf("default timeout %s is too short for slow engines like google_ai_mode", DefaultTimeout)
 	}
 }
 
@@ -412,8 +413,8 @@ func TestOSTimeoutWithoutAClientLimit(t *testing.T) {
 // The advice names a --timeout above the one that just ran out.
 func TestTimeoutAdviceRaisesTheLimit(t *testing.T) {
 	for limit, want := range map[time.Duration]string{
-		50 * time.Millisecond: "timed out after 50ms. This usually points to a slow or unstable network path (VPN, proxy, or connectivity issues): run with --debug to see where time was spent, or retry with a higher --timeout, such as --timeout 120,",
-		60 * time.Second:      "timed out after 60s. This usually points to a slow or unstable network path (VPN, proxy, or connectivity issues): run with --debug to see where time was spent, or retry with a higher --timeout, such as --timeout 120,",
+		50 * time.Millisecond: "timed out after 50ms. Slow engines, such as google_ai_mode, and no_cache=true can take longer: retry with a higher --timeout, such as --timeout 120,",
+		60 * time.Second:      "timed out after 60s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: retry with a higher --timeout, such as --timeout 120,",
 		120 * time.Second:     "--timeout 240,",
 		301 * time.Second:     "--timeout 602,",
 	} {
@@ -421,6 +422,23 @@ func TestTimeoutAdviceRaisesTheLimit(t *testing.T) {
 		var netErr *clierrors.NetworkError
 		if !errors.As(err, &netErr) || !strings.Contains(netErr.Message, want) {
 			t.Errorf("limit %s: got %v, want it to contain %q", limit, err, want)
+		}
+	}
+}
+
+// The timeout advice points to --debug only while the trace is off.
+func TestTimeoutAdvicePointsToDebugWhenItIsOff(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		c := New("secret", WithTimeout(time.Second))
+		if debug {
+			WithDebug(io.Discard, false)(c)
+		}
+		var netErr *clierrors.NetworkError
+		if err := c.networkError("/search.json", osTimeout{}); !errors.As(err, &netErr) {
+			t.Fatalf("debug %v: got %v, want a NetworkError", debug, err)
+		}
+		if suggests := strings.Contains(netErr.Message, "--debug shows which step stalled"); suggests == debug {
+			t.Errorf("debug %v: message %q", debug, netErr.Message)
 		}
 	}
 }

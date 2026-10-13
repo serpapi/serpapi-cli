@@ -191,7 +191,7 @@ func edgeCases() []edgeCase {
 		{name: "response/no answer in time", args: []string{"account", "--timeout", "50ms"}, api: hang, exit: 1, code: "network_error",
 			msg: "Request to /account.json timed out after 50ms"},
 		{name: "response/SERPAPI_TIMEOUT applies", args: []string{"account"}, env: map[string]string{"SERPAPI_TIMEOUT": "0.05"}, api: hang, exit: 1,
-			code: "network_error", msg: "Request to /account.json timed out after 50ms. This usually points to a slow or unstable network path"},
+			code: "network_error", msg: "Request to /account.json timed out after 50ms. Slow engines, such as google_ai_mode"},
 
 		{name: "paging/foreign next host and key", args: searchWith("--all-pages"), api: func(w http.ResponseWriter, r *http.Request) {
 			if pageNumber(r) == 1 {
