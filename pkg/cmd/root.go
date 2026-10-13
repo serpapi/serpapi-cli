@@ -79,8 +79,8 @@ limited or out of searches; 5xx SerpApi failed. No status means no usable
 answer: a network_error, such as a timeout, or an unreadable response.
 Requests time out after 60s: --timeout or SERPAPI_TIMEOUT sets seconds, 0
 waits indefinitely.
-Exit 130, code interrupted: stopped by Ctrl-C or SIGTERM, after printing what
-had arrived.
+Exit 130, code interrupted: Ctrl-C or SIGTERM stopped it before it finished,
+after printing what had arrived.
 
 Cost: each successful search counts against your monthly searches, including
 each page of --all-pages; cached, errored and failed ones don't, though errored

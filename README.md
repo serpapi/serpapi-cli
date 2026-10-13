@@ -158,7 +158,7 @@ A config file that can't be read or isn't valid TOML is reported by path and lin
   | 2 | `usage_error` | The command is wrong; fix it before retrying. |
   | 1 | `api_error` | `status` is the HTTP status: 200 the search ran but reported a problem, such as no results; 400 invalid parameters; 401 invalid API key; 403 account not allowed; 429 rate limited or out of searches; 5xx SerpApi failed. No `status`: the response was unreadable. |
   | 1 | `network_error` | No answer, such as a timeout. |
-  | 130 | `interrupted` | Stopped by Ctrl-C or SIGTERM after printing what had arrived, such as the `--all-pages` pages fetched so far. |
+  | 130 | `interrupted` | Ctrl-C or SIGTERM stopped it before it finished, after printing what had arrived, such as the `--all-pages` pages fetched so far. |
 
 - **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free.
 - **No prompts without a terminal.** Only `serpapi login` reads stdin, and it waits for the first line, so pipe the key in (`printf %s "$KEY" | serpapi login`) or, simpler, set `SERPAPI_KEY`.
