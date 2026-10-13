@@ -193,6 +193,43 @@ func TestSearchWithJQ(t *testing.T) {
 	}
 }
 
+// TestSearchDebugKeepsStderrJSON pipes stderr, as scripts and agents do, so
+// the --debug trace must arrive as {"debug":{...}} lines and leave stdout
+// untouched.
+func TestSearchDebugKeepsStderrJSON(t *testing.T) {
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "--debug", "--jq", ".search_metadata.id", "search", "engine=google", "q=coffee")
+	wantSuccess(t, res)
+	if id := strings.TrimSpace(res.stdout); id == "" || strings.Contains(id, "debug") {
+		t.Errorf("stdout should carry only the search ID, got %q", res.stdout)
+	}
+
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(res.stderr), "\n") {
+		var v struct {
+			Debug *struct {
+				Event string `json:"event"`
+			} `json:"debug"`
+			Warning map[string]any `json:"warning"`
+		}
+		if err := json.Unmarshal([]byte(line), &v); err != nil || (v.Debug == nil && v.Warning == nil) {
+			t.Fatalf("stderr line is not a JSON debug or warning object: %q", line)
+		}
+		if v.Debug != nil {
+			events = append(events, v.Debug.Event)
+		}
+	}
+	joined := strings.Join(events, "\n")
+	for _, want := range []string{"GET https://serpapi.com/search.json?api_key=[REDACTED]", "TLS handshake done", "Request sent", "Response: HTTP/", "Server search: id="} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("trace missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(res.stderr, key) {
+		t.Error("trace leaked the API key")
+	}
+}
+
 func TestAccount(t *testing.T) {
 	key := requireLive(t)
 	res := serpapi(t, "", "--api-key", key, "account")

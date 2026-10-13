@@ -1,12 +1,17 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/serpapi/serpapi-cli/pkg/api"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
+	"github.com/serpapi/serpapi-cli/pkg/output"
 )
 
 func TestResolveDebug(t *testing.T) {
@@ -37,6 +42,134 @@ func TestResolveDebug(t *testing.T) {
 				t.Errorf("expected %v, got %v", tt.want, got)
 			}
 		})
+	}
+}
+
+const debugSearchBody = `{"search_metadata":{"id":"abc123","status":"Success","created_at":"2026-10-09 12:00:00 UTC","processed_at":"2026-10-09 12:00:01 UTC","total_time_taken":1},"organic_results":[]}`
+
+// TestDebugOffTerminalKeepsStderrJSONLines is the reviewer's case: scripts
+// and agents parse stderr line by line, so a piped --debug run must emit
+// only JSON objects there, and the result on stdout must be untouched.
+func TestDebugOffTerminalKeepsStderrJSONLines(t *testing.T) {
+	fakeAPI(t, respond(debugSearchBody))
+
+	res := execute(t, "", "--debug", "search", "engine=google", "q=coffee")
+
+	if res.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, res.stdout)
+	}
+
+	lines := strings.Split(strings.TrimSpace(res.stderr), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("expected a trace on stderr, got %d lines:\n%s", len(lines), res.stderr)
+	}
+	var events []string
+	for _, line := range lines {
+		var v struct {
+			Debug *struct {
+				At      string  `json:"at"`
+				Elapsed float64 `json:"elapsed"`
+				Event   string  `json:"event"`
+			} `json:"debug"`
+			Error   map[string]any `json:"error"`
+			Warning map[string]any `json:"warning"`
+		}
+		if err := json.Unmarshal([]byte(line), &v); err != nil || (v.Debug == nil && v.Error == nil && v.Warning == nil) {
+			t.Fatalf("stderr line is not a JSON debug, warning or error object: %q", line)
+		}
+		if v.Error != nil {
+			t.Fatalf("unexpected error on stderr: %v", v.Error)
+		}
+		if v.Debug != nil {
+			events = append(events, v.Debug.Event)
+		}
+	}
+	joined := strings.Join(events, "\n")
+	for _, want := range []string{"GET http", "Timeout: 60s", "Request sent", "Response: HTTP/1.1 200 OK", "Server search: id=abc123", "Server timeline:"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("trace missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(res.stderr, "[debug]") {
+		t.Errorf("piped stderr must not carry plain-text debug lines:\n%s", res.stderr)
+	}
+}
+
+func TestDebugOnTerminalPrintsPlainText(t *testing.T) {
+	fakeAPI(t, respond(debugSearchBody))
+	isTerminal := output.IsTerminal
+	output.IsTerminal = func(io.Writer) bool { return true }
+	t.Cleanup(func() { output.IsTerminal = isTerminal })
+
+	res := execute(t, "", "--debug", "search", "engine=google", "q=coffee")
+
+	if res.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(res.stderr), "\n") {
+		if !strings.HasPrefix(line, "[debug] ") {
+			t.Errorf("terminal stderr line should be plain text, got %q", line)
+		}
+	}
+	if !strings.Contains(res.stderr, "Server timeline:") {
+		t.Errorf("expected server timeline in trace:\n%s", res.stderr)
+	}
+}
+
+func TestDebugEnvEnablesTrace(t *testing.T) {
+	fakeAPI(t, respond(debugSearchBody))
+	t.Setenv("SERPAPI_DEBUG", "1")
+
+	res := execute(t, "", "search", "engine=google", "q=coffee")
+
+	if res.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, `"debug":`) {
+		t.Errorf("SERPAPI_DEBUG=1 should enable the trace:\n%s", res.stderr)
+	}
+}
+
+func TestNoDebugMeansNoTrace(t *testing.T) {
+	fakeAPI(t, respond(debugSearchBody))
+
+	res := execute(t, "", "search", "engine=google", "q=coffee")
+
+	wantWarnings(t, wantOK(t, res))
+	if strings.Contains(res.stderr, "debug") {
+		t.Errorf("stderr should be silent without --debug:\n%s", res.stderr)
+	}
+}
+
+func TestDebugTimeoutErrorStaysLastJSONLine(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(5 * time.Second):
+		case <-r.Context().Done():
+		}
+	})
+
+	res := execute(t, "", "--debug", "--timeout", "0.05", "search", "engine=google", "q=coffee")
+
+	if res.code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", res.code, res.stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(res.stderr), "\n")
+	var last struct {
+		Error map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil || last.Error == nil {
+		t.Fatalf("last stderr line should be the JSON error, got %q", lines[len(lines)-1])
+	}
+	if msg, _ := last.Error["message"].(string); !strings.Contains(msg, "--debug") || !strings.Contains(msg, "timed out") {
+		t.Errorf("timeout message should mention --debug: %q", msg)
+	}
+	if !strings.Contains(res.stderr, "Request failed:") {
+		t.Errorf("trace should report the failed request:\n%s", res.stderr)
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -11,20 +12,20 @@ import (
 	"time"
 )
 
-func newDebugServer(t *testing.T, w *bytes.Buffer) *Client {
+func newDebugServer(t *testing.T, w *bytes.Buffer, jsonLines bool) *Client {
 	t.Helper()
 	srv := newTestServer(t, func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.Header().Set("Serpapi-Search-Id", "abc123")
 		_, _ = rw.Write([]byte(`{"ok":true}`))
 	})
-	return New("secret_key", WithBaseURL(srv.URL), WithTimeout(5*time.Second), WithDebug(w))
+	return New("secret_key", WithBaseURL(srv.URL), WithTimeout(5*time.Second), WithDebug(w, jsonLines))
 }
 
 func TestDebugDisabledByDefault(t *testing.T) {
 	var buf bytes.Buffer
-	client := newDebugServer(t, &buf)
-	WithDebug(nil)(client)
+	client := newDebugServer(t, &buf, false)
+	WithDebug(nil, false)(client)
 
 	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -36,7 +37,7 @@ func TestDebugDisabledByDefault(t *testing.T) {
 
 func TestDebugTraceCoversRequestLifecycle(t *testing.T) {
 	var buf bytes.Buffer
-	client := newDebugServer(t, &buf)
+	client := newDebugServer(t, &buf, false)
 
 	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -73,10 +74,88 @@ func TestDebugTraceCoversRequestLifecycle(t *testing.T) {
 	}
 }
 
+// debugLine is the JSON form of one trace line.
+type debugLine struct {
+	Debug struct {
+		At      string         `json:"at"`
+		Elapsed float64        `json:"elapsed"`
+		Event   string         `json:"event"`
+		Data    map[string]any `json:"data"`
+	} `json:"debug"`
+}
+
+// parseDebugLines requires every line of out to be a {"debug":{...}} object.
+func parseDebugLines(t *testing.T, out string) []debugLine {
+	t.Helper()
+	var lines []debugLine
+	for _, raw := range strings.Split(strings.TrimSpace(out), "\n") {
+		var l debugLine
+		if err := json.Unmarshal([]byte(raw), &l); err != nil || l.Debug.Event == "" {
+			t.Fatalf("debug line is not a JSON debug object: %q (%v)", raw, err)
+		}
+		if _, err := time.Parse("2006-01-02T15:04:05.000Z", l.Debug.At); err != nil {
+			t.Errorf("bad timestamp %q: %v", l.Debug.At, err)
+		}
+		lines = append(lines, l)
+	}
+	return lines
+}
+
+func TestDebugJSONLinesStayParseable(t *testing.T) {
+	var buf bytes.Buffer
+	client := newDebugServer(t, &buf, true)
+
+	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lines := parseDebugLines(t, buf.String())
+
+	events := make([]string, 0, len(lines))
+	for _, l := range lines {
+		events = append(events, l.Debug.Event)
+	}
+	joined := strings.Join(events, "\n")
+	for _, want := range []string{"GET http", "Request sent", "First response byte", "Response: HTTP/1.1 200 OK", "Body received: 11 bytes"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("events missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(buf.String(), "secret_key") {
+		t.Errorf("JSON debug output must redact the API key:\n%s", buf.String())
+	}
+
+	// Headers travel as one structured event rather than one line each.
+	var sawHeaders, sawConn bool
+	for _, l := range lines {
+		if strings.HasPrefix(l.Debug.Event, "Response:") {
+			sawHeaders = true
+			headers, _ := l.Debug.Data["headers"].(map[string]any)
+			if headers["Serpapi-Search-Id"] != "abc123" {
+				t.Errorf("expected Serpapi-Search-Id in response data, got %v", l.Debug.Data)
+			}
+			if status, _ := l.Debug.Data["status"].(float64); status != 200 {
+				t.Errorf("expected status 200 in response data, got %v", l.Debug.Data["status"])
+			}
+		}
+		if strings.HasPrefix(l.Debug.Event, "Using connection:") {
+			sawConn = true
+			if l.Debug.Data["local"] == nil || l.Debug.Data["remote"] == nil {
+				t.Errorf("expected local/remote in connection data, got %v", l.Debug.Data)
+			}
+		}
+		if strings.HasPrefix(l.Debug.Event, "  ") {
+			t.Errorf("JSON mode should not emit indented header lines: %q", l.Debug.Event)
+		}
+	}
+	if !sawHeaders || !sawConn {
+		t.Errorf("expected Response and Using connection events, got:\n%s", joined)
+	}
+}
+
 func TestDebugTraceReportsTimeout(t *testing.T) {
 	var buf bytes.Buffer
 	client := newSlowServer(t, 5*time.Second, 50*time.Millisecond)
-	WithDebug(&buf)(client)
+	WithDebug(&buf, false)(client)
 
 	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err == nil {
 		t.Fatal("expected timeout error")
@@ -95,7 +174,7 @@ func TestDebugTraceReportsTimeout(t *testing.T) {
 
 // newMetadataServer serves a search response whose created_at/processed_at
 // are stamped at request arrival, so the correlation line has real values.
-func newMetadataServer(t *testing.T, w *bytes.Buffer, processing time.Duration) *Client {
+func newMetadataServer(t *testing.T, w *bytes.Buffer, jsonLines bool, processing time.Duration) *Client {
 	t.Helper()
 	srv := newTestServer(t, func(rw http.ResponseWriter, r *http.Request) {
 		created := time.Now().UTC()
@@ -104,12 +183,12 @@ func newMetadataServer(t *testing.T, w *bytes.Buffer, processing time.Duration) 
 		fmt.Fprintf(rw, `{"search_metadata":{"id":"abc123","status":"Success","created_at":%q,"processed_at":%q,"total_time_taken":%g}}`,
 			created.Format(searchMetadataTimeLayout), processed.Format(searchMetadataTimeLayout), processing.Seconds())
 	})
-	return New("secret_key", WithBaseURL(srv.URL), WithTimeout(10*time.Second), WithDebug(w))
+	return New("secret_key", WithBaseURL(srv.URL), WithTimeout(10*time.Second), WithDebug(w, jsonLines))
 }
 
 func TestDebugCorrelatesSearchMetadata(t *testing.T) {
 	var buf bytes.Buffer
-	client := newMetadataServer(t, &buf, 1*time.Second)
+	client := newMetadataServer(t, &buf, false, 1*time.Second)
 
 	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -128,6 +207,38 @@ func TestDebugCorrelatesSearchMetadata(t *testing.T) {
 	}
 	if strings.Contains(out, "Note:") {
 		t.Errorf("fast response should not trigger a stall note:\n%s", out)
+	}
+}
+
+func TestDebugCorrelatesSearchMetadataAsJSON(t *testing.T) {
+	var buf bytes.Buffer
+	client := newMetadataServer(t, &buf, true, 1*time.Second)
+
+	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var sawSearch, sawTimeline bool
+	for _, l := range parseDebugLines(t, buf.String()) {
+		switch {
+		case strings.HasPrefix(l.Debug.Event, "Server search:"):
+			sawSearch = true
+			if l.Debug.Data["id"] != "abc123" || l.Debug.Data["total_time_taken"] != 1.0 {
+				t.Errorf("unexpected search data: %v", l.Debug.Data)
+			}
+		case strings.HasPrefix(l.Debug.Event, "Server timeline:"):
+			sawTimeline = true
+			for _, key := range []string{"created_at", "processed_at", "sent_to_created_s", "processing_s", "processed_to_headers_s"} {
+				if _, ok := l.Debug.Data[key]; !ok {
+					t.Errorf("timeline data missing %q: %v", key, l.Debug.Data)
+				}
+			}
+			if l.Debug.Data["processing_s"] != 1.0 {
+				t.Errorf("expected processing_s=1, got %v", l.Debug.Data["processing_s"])
+			}
+		}
+	}
+	if !sawSearch || !sawTimeline {
+		t.Errorf("expected Server search and Server timeline events:\n%s", buf.String())
 	}
 }
 
@@ -189,13 +300,34 @@ func TestDebugNoStallNoteWhenServerProcessingDominates(t *testing.T) {
 	}
 }
 
+func TestDebugCachedResultIsNotCorrelated(t *testing.T) {
+	var buf bytes.Buffer
+	// The server created the search 26 minutes before we asked: a cache hit.
+	// Its timestamps describe the original search, so no stall note applies
+	// even though "headers after processed_at" is enormous. The round trip
+	// is firstByte - sent = (-26m + 1s + 26m + 0.8s) = 1.8s.
+	tr, body := stallTracer(&buf, -26*time.Minute, 1*time.Second, 26*time.Minute+800*time.Millisecond)
+	tr.logSearchMetadata(body)
+
+	out := buf.String()
+	if !strings.Contains(out, "Server timeline: cached result from 2026-10-09T11:34:00Z (1560s before this request)") {
+		t.Errorf("expected cached-result timeline:\n%s", out)
+	}
+	if !strings.Contains(out, "the +1.8s wait was network round trip only") {
+		t.Errorf("expected round-trip wait:\n%s", out)
+	}
+	if strings.Contains(out, "Note:") || strings.Contains(out, "after processed_at") {
+		t.Errorf("cached result must not produce a stall diagnosis:\n%s", out)
+	}
+}
+
 func TestDebugSearchMetadataUnparseableIsReported(t *testing.T) {
 	var buf bytes.Buffer
 	srv := newTestServer(t, func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		_, _ = rw.Write([]byte(`{"search_metadata":{"id":"abc123","status":"Success","created_at":"soon","processed_at":"later","total_time_taken":0.5}}`))
 	})
-	client := New("k", WithBaseURL(srv.URL), WithTimeout(5*time.Second), WithDebug(&buf))
+	client := New("k", WithBaseURL(srv.URL), WithTimeout(5*time.Second), WithDebug(&buf, false))
 
 	if _, err := client.Search(context.Background(), map[string]string{"q": "x"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -211,7 +343,7 @@ func TestDebugSearchMetadataUnparseableIsReported(t *testing.T) {
 
 func TestDebugNoMetadataLineForNonSearchEndpoints(t *testing.T) {
 	var buf bytes.Buffer
-	client := newDebugServer(t, &buf)
+	client := newDebugServer(t, &buf, false)
 
 	if _, err := client.Account(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)

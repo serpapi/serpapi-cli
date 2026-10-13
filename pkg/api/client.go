@@ -39,7 +39,8 @@ type Client struct {
 	http    *http.Client
 
 	// debug, if set, receives a trace of each request; see WithDebug.
-	debug io.Writer
+	debug     io.Writer
+	debugJSON bool
 }
 
 // Option configures a Client.

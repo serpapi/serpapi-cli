@@ -83,7 +83,9 @@ invalid parameters; 401 invalid API key; 403 account not allowed; 429 rate
 limited or out of searches; 5xx SerpApi failed. No status means no usable
 answer: a network_error, such as a timeout, or an unreadable response.
 Requests time out after 60s: --timeout or SERPAPI_TIMEOUT sets seconds, 0
-waits indefinitely.
+waits indefinitely. --debug or SERPAPI_DEBUG=1 traces each request on stderr
+(DNS, connect, TLS, first byte, headers, server timeline): plain text on a
+terminal, otherwise one {"debug":{...}} JSON object per line.
 Exit 130, code interrupted: Ctrl-C or SIGTERM stopped it before it finished,
 after printing what had arrived.
 
@@ -239,7 +241,7 @@ func init() {
 		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d; env SERPAPI_TIMEOUT)",
 		int(api.DefaultTimeout/time.Second)))
 	pf.BoolVar(&debugFlag, "debug", false,
-		"trace each request on stderr: DNS, connect, TLS, first byte, headers and the server timeline (env SERPAPI_DEBUG=1)")
+		"trace each request on stderr: DNS, connect, TLS, first byte, headers and the server timeline; JSON lines off a terminal (env SERPAPI_DEBUG=1)")
 
 	rootCmd.PersistentPreRunE = validateGlobalFlags
 
@@ -360,7 +362,9 @@ func resolveAPIKey() (string, error) {
 func newClient(apiKey string) *api.Client {
 	opts := []api.Option{api.WithTimeout(requestTimeout)}
 	if debugRequests {
-		opts = append(opts, api.WithDebug(rootCmd.ErrOrStderr()))
+		// Off a terminal, stderr carries only JSON lines, so the trace does too.
+		stderr := rootCmd.ErrOrStderr()
+		opts = append(opts, api.WithDebug(stderr, !output.IsTerminal(stderr)))
 	}
 	return api.New(apiKey, append(opts, clientOptions...)...)
 }

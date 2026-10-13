@@ -16,17 +16,31 @@ import (
 )
 
 // WithDebug traces each request to w: DNS, connect, TLS, first byte, status
-// and headers, and the search_metadata timeline. Passing a nil w disables it.
-func WithDebug(w io.Writer) Option {
+// and headers, and the search_metadata timeline. With jsonLines set, every
+// line is one JSON object, {"debug":{"at":...,"elapsed":...,"event":...}},
+// so stderr stays parseable line by line off a terminal; otherwise lines are
+// plain text, "[debug] <at> +<elapsed>s <event>". Passing a nil w disables it.
+func WithDebug(w io.Writer, jsonLines bool) Option {
 	return func(c *Client) {
 		c.debug = w
+		c.debugJSON = jsonLines
 	}
+}
+
+// debugEvent is one JSON debug line. Headers and the search timeline carry
+// structured fields next to the human-readable event.
+type debugEvent struct {
+	At      string         `json:"at"`
+	Elapsed float64        `json:"elapsed"`
+	Event   string         `json:"event"`
+	Data    map[string]any `json:"data,omitempty"`
 }
 
 // tracer writes timestamped request-lifecycle events. A nil *tracer is a
 // valid no-op so call sites don't need to guard on whether debug is enabled.
 type tracer struct {
 	w     io.Writer
+	json  bool
 	start time.Time
 	mu    sync.Mutex
 
@@ -40,22 +54,45 @@ func (c *Client) newTracer() *tracer {
 	if c.debug == nil {
 		return nil
 	}
-	return &tracer{w: c.debug, start: time.Now()}
+	return &tracer{w: c.debug, json: c.debugJSON, start: time.Now()}
 }
 
-// logf writes one line: wall-clock UTC time (to correlate with server-side
-// created_at/processed_at), elapsed since the request started, and the
-// message with any api_key value redacted.
+// logf writes one event with no structured data.
 func (t *tracer) logf(format string, args ...any) {
+	t.log(nil, format, args...)
+}
+
+// log writes one event: wall-clock UTC time (to correlate with server-side
+// created_at/processed_at), seconds since the request started, and the
+// message with any api_key value redacted. data, if not nil, is included in
+// the JSON form only.
+func (t *tracer) log(data map[string]any, format string, args ...any) {
 	if t == nil {
 		return
 	}
 	now := time.Now()
+	at := now.UTC().Format("2006-01-02T15:04:05.000Z")
+	elapsed := now.Sub(t.start).Seconds()
 	msg := clierrors.RedactAPIKey(fmt.Sprintf(format, args...))
+
+	var line []byte
+	if t.json {
+		b, err := json.Marshal(map[string]any{"debug": debugEvent{At: at, Elapsed: round3(elapsed), Event: msg, Data: data}})
+		if err != nil {
+			return
+		}
+		line = append(b, '\n')
+	} else {
+		line = fmt.Appendf(nil, "[debug] %s +%6.3fs %s\n", at, elapsed, msg)
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	fmt.Fprintf(t.w, "[debug] %s +%6.3fs %s\n",
-		now.UTC().Format("2006-01-02T15:04:05.000Z"), now.Sub(t.start).Seconds(), msg)
+	_, _ = t.w.Write(line)
+}
+
+func round3(f float64) float64 {
+	return float64(int64(f*1000+0.5)) / 1000
 }
 
 // clientTrace returns httptrace hooks that report each connection phase.
@@ -110,11 +147,12 @@ func (t *tracer) clientTrace() *httptrace.ClientTrace {
 					remote = a.String()
 				}
 			}
+			data := map[string]any{"local": local, "remote": remote, "reused": info.Reused}
 			if info.Reused {
-				t.logf("Using connection: %s -> %s (reused, idle %s)", local, remote, info.IdleTime.Round(time.Millisecond))
+				t.log(data, "Using connection: %s -> %s (reused, idle %s)", local, remote, info.IdleTime.Round(time.Millisecond))
 				return
 			}
-			t.logf("Using connection: %s -> %s (new)", local, remote)
+			t.log(data, "Using connection: %s -> %s (new)", local, remote)
 		},
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
 			if info.Err != nil {
@@ -152,17 +190,28 @@ func (t *tracer) logRequest(req *http.Request, timeout time.Duration) {
 	}
 }
 
-// logResponse reports the status line and headers in a stable order.
+// logResponse reports the status line and headers in a stable order. The
+// JSON form carries them as one event; the text form lists one per line.
 func (t *tracer) logResponse(resp *http.Response) {
 	if t == nil || resp == nil {
 		return
 	}
-	t.logf("Response: %s %s", resp.Proto, resp.Status)
 	names := make([]string, 0, len(resp.Header))
 	for name := range resp.Header {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+
+	if t.json {
+		headers := make(map[string]string, len(names))
+		for _, name := range names {
+			headers[name] = strings.Join(resp.Header[name], ", ")
+		}
+		t.log(map[string]any{"status": resp.StatusCode, "proto": resp.Proto, "headers": headers},
+			"Response: %s %s", resp.Proto, resp.Status)
+		return
+	}
+	t.logf("Response: %s %s", resp.Proto, resp.Status)
 	for _, name := range names {
 		for _, value := range resp.Header[name] {
 			t.logf("  %s: %s", name, value)
@@ -203,7 +252,8 @@ func (t *tracer) logSearchMetadata(body []byte) {
 	sentAt, firstByteAt := t.sentAt, t.firstByteAt
 	t.mu.Unlock()
 
-	t.logf("Server search: id=%s status=%s total_time_taken=%gs", m.ID, m.Status, m.TotalTimeTaken)
+	t.log(map[string]any{"id": m.ID, "status": m.Status, "total_time_taken": m.TotalTimeTaken},
+		"Server search: id=%s status=%s total_time_taken=%gs", m.ID, m.Status, m.TotalTimeTaken)
 
 	createdAt, err1 := time.Parse(searchMetadataTimeLayout, m.CreatedAt)
 	processedAt, err2 := time.Parse(searchMetadataTimeLayout, m.ProcessedAt)
@@ -212,10 +262,32 @@ func (t *tracer) logSearchMetadata(body []byte) {
 		return
 	}
 
-	t.logf("Server timeline: created_at=%s (%s after request sent), processed_at=%s (%s processing), headers received %s after processed_at",
-		createdAt.Format("15:04:05Z"), signedSeconds(createdAt.Sub(sentAt)),
-		processedAt.Format("15:04:05Z"), signedSeconds(processedAt.Sub(createdAt)),
-		signedSeconds(firstByteAt.Sub(processedAt)))
+	beforeCreate := createdAt.Sub(sentAt)
+	processing := processedAt.Sub(createdAt)
+	afterProcess := firstByteAt.Sub(processedAt)
+
+	// A search created well before this request was sent is a cached result:
+	// its timestamps describe the original search, not this round trip. 5s
+	// absorbs clock skew between client and server.
+	if beforeCreate < -5*time.Second {
+		t.log(map[string]any{
+			"created_at":   createdAt.Format(time.RFC3339),
+			"processed_at": processedAt.Format(time.RFC3339),
+			"cached":       true,
+		}, "Server timeline: cached result from %s (%.0fs before this request); the %s wait was network round trip only",
+			createdAt.Format(time.RFC3339), (-beforeCreate).Seconds(), signedSeconds(firstByteAt.Sub(sentAt)))
+		return
+	}
+	t.log(map[string]any{
+		"created_at":             createdAt.Format(time.RFC3339),
+		"processed_at":           processedAt.Format(time.RFC3339),
+		"sent_to_created_s":      round3(beforeCreate.Seconds()),
+		"processing_s":           round3(processing.Seconds()),
+		"processed_to_headers_s": round3(afterProcess.Seconds()),
+	}, "Server timeline: created_at=%s (%s after request sent), processed_at=%s (%s processing), headers received %s after processed_at",
+		createdAt.Format("15:04:05Z"), signedSeconds(beforeCreate),
+		processedAt.Format("15:04:05Z"), signedSeconds(processing),
+		signedSeconds(afterProcess))
 
 	// Flag the phase that dominated when the wait was noticeably longer than
 	// the server's own processing time. 2s absorbs the 1s timestamp
@@ -226,10 +298,10 @@ func (t *tracer) logSearchMetadata(body []byte) {
 		return
 	}
 	switch {
-	case createdAt.Sub(sentAt) > slack:
-		t.logf("Note: most of the wait (%s) happened before the request reached SerpApi; check the network path (DNS, VPN, proxy, connectivity)", signedSeconds(createdAt.Sub(sentAt)))
-	case firstByteAt.Sub(processedAt) > slack:
-		t.logf("Note: the response took %s to arrive after SerpApi finished processing; check the network path back to this machine", signedSeconds(firstByteAt.Sub(processedAt)))
+	case beforeCreate > slack:
+		t.logf("Note: most of the wait (%s) happened before the request reached SerpApi; check the network path (DNS, VPN, proxy, connectivity)", signedSeconds(beforeCreate))
+	case afterProcess > slack:
+		t.logf("Note: the response took %s to arrive after SerpApi finished processing; check the network path back to this machine", signedSeconds(afterProcess))
 	}
 }
 
