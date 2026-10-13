@@ -34,6 +34,11 @@ archives:
 checksum:
   name_template: "serpapi_{{.Version}}_checksums.txt"
 
+release:
+  # A re-run for the same tag, after a partial upload, replaces the assets
+  # already there instead of failing on them.
+  replace_existing_artifacts: true
+
 snapshot:
   version_template: "{{.Version}}-next"
 

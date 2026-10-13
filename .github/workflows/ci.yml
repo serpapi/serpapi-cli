@@ -19,11 +19,12 @@ on:
 
 permissions: {}
 
-# Runs on main tag and release one at a time, in order; a newer run replaces a
-# waiting one, whose commits it contains. Other runs never wait.
+# Runs on main test, tag and release one at a time, in order; each waits its
+# turn rather than replacing a waiting one. Other runs never wait.
 concurrency:
   group: ${{ github.ref == 'refs/heads/main' && 'release-main' || github.run_id }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   test:
@@ -103,4 +104,5 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
+      sha: ${{ github.sha }}
     secrets: inherit
