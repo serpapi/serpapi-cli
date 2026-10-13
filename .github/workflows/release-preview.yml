@@ -1,0 +1,35 @@
+name: Release preview
+
+# Says on each pull request what merging it releases, so a missing
+# release:minor label shows up before the merge. Reads nothing secret.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: tag
+        env:
+          SHA: ${{ github.sha }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          DRY_RUN: "true"
+        run: bash .github/scripts/release-tag.sh
+      - env:
+          REASON: ${{ steps.tag.outputs.reason }}
+          NEXT: ${{ steps.tag.outputs.next }}
+        run: |
+          notes="none: GoReleaser will list the commits"
+          if [ -n "$NEXT" ] && [ -f ".github/release-notes/$NEXT.md" ]; then notes=".github/release-notes/$NEXT.md"; fi
+          echo "::notice title=Merging releases::$REASON; release notes: $notes"
+          printf '### Merging this pull request\n\n%s\n\nRelease notes: %s\n' "$REASON" "$notes" >> "$GITHUB_STEP_SUMMARY"

@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  # ci.yml calls this after it tags a commit on main.
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to release
+        type: string
+        required: true
 
 permissions: {}
 
@@ -12,9 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ env.TAG }}
           fetch-depth: 0
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -22,12 +32,20 @@ jobs:
           # release binaries need the latest patched Go (v0.2.3 shipped go1.25.0).
           go-version: stable
           check-latest: true
+      # .github/release-notes/vX.Y.Z.md, when the release has one, replaces
+      # GoReleaser's list of commits.
+      - id: notes
+        run: |
+          if [ -f ".github/release-notes/$TAG.md" ]; then
+            echo "args=--release-notes .github/release-notes/$TAG.md" >> "$GITHUB_OUTPUT"
+          fi
       - uses: goreleaser/goreleaser-action@9ed2f89a662bf1735a48bc8557fd212fa902bebf # v6.2.1
         with:
           version: ~> v2
-          args: release --clean
+          args: release --clean ${{ steps.notes.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ env.TAG }}
 
   homebrew:
     runs-on: ubuntu-latest
@@ -35,7 +53,7 @@ jobs:
     steps:
       - name: Update Homebrew formula
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           VERSION="${TAG#v}"
