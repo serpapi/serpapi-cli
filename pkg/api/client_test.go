@@ -571,3 +571,46 @@ func TestUploadImageMissingFile(t *testing.T) {
 		t.Fatalf("expected UsageError, got %T: %v", err, err)
 	}
 }
+
+func TestUploadImageRefusesEmptyAndOversizedImagesUnsent(t *testing.T) {
+	srv := newTestServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s", r.URL.Path)
+	})
+	client := New("secret_key", WithBaseURL(srv.URL))
+	for name, content := range map[string][]byte{"empty": {}, "one byte over": make([]byte, MaxImageSize+1)} {
+		_, err := client.UploadImageBytes(context.Background(), content, "photo.png")
+		var usageErr *clierrors.UsageError
+		if !errors.As(err, &usageErr) {
+			t.Errorf("%s: got %v, want a UsageError", name, err)
+		}
+	}
+}
+
+func TestUploadImageSendsOneAtTheLimit(t *testing.T) {
+	client, got := newUploadServer(t, http.StatusOK, `{"image_id":"id"}`)
+	content := append(append([]byte{}, png1x1...), make([]byte, MaxImageSize-len(png1x1))...)
+
+	if _, err := client.UploadImageBytes(context.Background(), content, "photo.png"); err != nil {
+		t.Fatalf("upload at the limit: %v", err)
+	}
+	if len(got.content) != MaxImageSize {
+		t.Errorf("uploaded %d bytes, want %d", len(got.content), MaxImageSize)
+	}
+}
+
+// endless reads zeros forever and counts them.
+type endless struct{ n int }
+
+func (e *endless) Read(p []byte) (int, error) {
+	clear(p)
+	e.n += len(p)
+	return len(p), nil
+}
+
+func TestReadImageStopsPastTheLimit(t *testing.T) {
+	r := &endless{}
+	content, err := ReadImage(r)
+	if err != nil || len(content) != MaxImageSize+1 || r.n != MaxImageSize+1 {
+		t.Errorf("read %d bytes and kept %d (err %v), want both %d", r.n, len(content), err, MaxImageSize+1)
+	}
+}

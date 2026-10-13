@@ -351,17 +351,38 @@ func (c *Client) Locations(ctx context.Context, params map[string]string) (json.
 // contains an image_id usable with engines that accept uploaded images, such
 // as google_lens. Image IDs expire after 10 minutes.
 func (c *Client) UploadImage(ctx context.Context, path string) (json.RawMessage, error) {
-	content, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, &clierrors.UsageError{Message: "Cannot read image file: " + err.Error()}
+	}
+	defer f.Close()
+	content, err := ReadImage(f)
 	if err != nil {
 		return nil, &clierrors.UsageError{Message: "Cannot read image file: " + err.Error()}
 	}
 	return c.UploadImageBytes(ctx, content, filepath.Base(path))
 }
 
+// MaxImageSize is the Image API's 500 KB limit, read as 500 KiB so the CLI
+// never refuses an image the API would take.
+const MaxImageSize = 500 << 10
+
+// ReadImage reads an image to upload, stopping one byte past MaxImageSize:
+// UploadImageBytes refuses a larger one, which needn't be read whole.
+func ReadImage(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, MaxImageSize+1))
+}
+
 // UploadImageBytes uploads an in-memory image using the Image API. fileName
 // is sent as the multipart filename; when empty, one is derived from the
 // detected content type.
 func (c *Client) UploadImageBytes(ctx context.Context, content []byte, fileName string) (json.RawMessage, error) {
+	switch {
+	case len(content) == 0:
+		return nil, &clierrors.UsageError{Message: "The image is empty"}
+	case len(content) > MaxImageSize:
+		return nil, &clierrors.UsageError{Message: "The image is over 500 KB, the Image API's limit; resize or compress it"}
+	}
 	if fileName == "" {
 		fileName = defaultImageFileName(content)
 	}

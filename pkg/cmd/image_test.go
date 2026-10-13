@@ -143,3 +143,25 @@ func TestImageWithImageIDIsAUsageError(t *testing.T) {
 
 	wantError(t, res, 2, "usage_error", "Use either --image or image_id=<id>, not both")
 }
+
+func TestImageRefusesEmptyAndOversizedImagesUnsent(t *testing.T) {
+	big := append(append([]byte{}, png1x1...), make([]byte, 600<<10)...)
+	for _, tc := range []struct {
+		name, stdin, msg string
+		args             func(t *testing.T) []string
+	}{
+		{"empty file", "", "The image is empty", func(t *testing.T) []string { return []string{"image", writeImage(t, "empty.png", nil)} }},
+		{"empty stdin", "", "The image is empty", func(t *testing.T) []string { return []string{"image", "-"} }},
+		{"600 KB file", "", "over 500 KB", func(t *testing.T) []string { return []string{"image", writeImage(t, "big.png", big)} }},
+		{"600 KB on stdin", string(big), "over 500 KB", func(t *testing.T) []string { return []string{"image", "-"} }},
+		{"600 KB for a search", "", "over 500 KB", func(t *testing.T) []string {
+			return []string{"search", "engine=google_lens", "--image", writeImage(t, "big.png", big)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeAPI(t, nil)
+			res := execute(t, tc.stdin, append([]string{"--api-key", imageKey}, tc.args(t)...)...)
+			wantError(t, res, 2, "usage_error", tc.msg)
+		})
+	}
+}

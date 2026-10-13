@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"io"
 
 	"github.com/spf13/cobra"
 
@@ -54,7 +53,7 @@ func uploadImage(cmd *cobra.Command, client *api.Client, path string) (json.RawM
 	var content []byte
 	if path == "-" {
 		var err error
-		content, err = io.ReadAll(cmd.InOrStdin())
+		content, err = api.ReadImage(cmd.InOrStdin())
 		if err != nil {
 			return nil, &clierrors.UsageError{Message: "Cannot read image from stdin: " + err.Error()}
 		}
