@@ -11,6 +11,13 @@ on:
         description: The tag to release
         type: string
         required: true
+  # To release an existing tag again, e.g. after a failed run.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing v* tag to release
+        type: string
+        required: true
 
 permissions: {}
 

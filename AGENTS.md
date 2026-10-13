@@ -9,7 +9,7 @@
   1. runs GoReleaser (`.goreleaser.yml`), which publishes a GitHub release with 5 archives (darwin and linux on amd64 and arm64, windows on amd64) and `serpapi_<version>_checksums.txt`, and stamps the version into `serpapi --version`. `.github/release-notes/<tag>.md`, when it exists, is the release body; otherwise GoReleaser lists the commits;
   2. writes `Formula/serpapi-cli.rb` in `serpapi/homebrew-tap` from those checksums and pushes it as a `serpapi-cli <version>` commit.
 - To release by hand, run the CI workflow on `main` from the Actions tab with a bump (`dry_run` is on by default), or push a lightweight `v*` tag on a `main` commit whose CI passed with no `--- SKIP` in the e2e log; `release.yml` runs on the pushed tag.
-- If a release job fails after the tag was made, re-run the failed jobs of that CI run; the tag stays.
+- If a release job fails after the tag was made, re-run the failed jobs of that CI run, or, once the cause is fixed on `main`, run the Release workflow from the Actions tab with that tag. The tag stays.
 - Never move, delete or reuse a published tag: Go's module proxy and checksum database keep the first content they saw for each version, so a moved tag never reaches most `go install` users and fails checksum verification for the rest.
 - v0.2.1 to v0.2.3 are tagged on `go-rewrite`, which `main` doesn't contain; `release-tag.sh` compares files with the latest release, not history.
 - To change a published release's notes: `gh release edit v0.3.0 -R serpapi/serpapi-cli --notes-file <file>`.
