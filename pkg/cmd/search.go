@@ -148,7 +148,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		if keyErr != nil {
 			return keyErr
 		}
-		imageID, err := uploadImageID(cmd.Context(), api.New(apiKey), imageFlag)
+		imageID, err := uploadImageID(cmd, newClient(apiKey), imageFlag)
 		if err != nil {
 			return err
 		}

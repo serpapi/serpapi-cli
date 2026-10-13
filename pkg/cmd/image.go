@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -42,7 +40,7 @@ func runImage(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result, err := uploadImage(cmd.Context(), api.New(apiKey), args[0])
+	result, err := uploadImage(cmd, newClient(apiKey), args[0])
 	if err != nil {
 		return err
 	}
@@ -51,11 +49,12 @@ func runImage(cmd *cobra.Command, args []string) error {
 
 // uploadImage uploads the image at path, or from stdin when path is "-",
 // showing a spinner while the request is in flight.
-func uploadImage(ctx context.Context, client *api.Client, path string) (json.RawMessage, error) {
+func uploadImage(cmd *cobra.Command, client *api.Client, path string) (json.RawMessage, error) {
+	ctx := cmd.Context()
 	var content []byte
 	if path == "-" {
 		var err error
-		content, err = io.ReadAll(os.Stdin)
+		content, err = io.ReadAll(cmd.InOrStdin())
 		if err != nil {
 			return nil, &clierrors.UsageError{Message: "Cannot read image from stdin: " + err.Error()}
 		}
@@ -70,8 +69,8 @@ func uploadImage(ctx context.Context, client *api.Client, path string) (json.Raw
 }
 
 // uploadImageID uploads an image and returns the image_id from the response.
-func uploadImageID(ctx context.Context, client *api.Client, path string) (string, error) {
-	raw, err := uploadImage(ctx, client, path)
+func uploadImageID(cmd *cobra.Command, client *api.Client, path string) (string, error) {
+	raw, err := uploadImage(cmd, client, path)
 	if err != nil {
 		return "", err
 	}
