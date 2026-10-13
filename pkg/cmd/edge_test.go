@@ -691,9 +691,10 @@ func TestExitAfterGraceCountsFromTheSignal(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(&signaled{at: time.Now().Add(-interruptGrace)})
 	exited := make(chan struct{})
+	var stderr lockedBuffer
 	start := time.Now()
 
-	go exitAfterGrace(ctx, make(chan struct{}), func() {}, io.Discard, func(int) { close(exited) })
+	go exitAfterGrace(ctx, make(chan struct{}), func() {}, &stderr, func(int) { close(exited) })
 
 	select {
 	case <-exited:
@@ -702,6 +703,13 @@ func TestExitAfterGraceCountsFromTheSignal(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("never exited")
+	}
+	// The message has a goroutine of its own; outliving this test, it would
+	// race with tests that swap output.IsTerminal.
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(stderr.String(), "Stopped 2s after the signal"); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("stderr = %q, want the watchdog's message", stderr.String())
+		}
 	}
 }
 
