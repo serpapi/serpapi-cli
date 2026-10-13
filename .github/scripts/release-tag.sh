@@ -6,10 +6,12 @@
 #
 # Environment:
 #   SHA         the commit
-#   BUMP        auto (default), patch, minor or major. auto takes the bump from
-#               the pull request's release:major, release:minor or
-#               release:skip label, else patch, and releases only when
-#               something that ships changed since the latest release.
+#   BUMP        auto (default), patch, minor or major. auto bumps minor or
+#               major when any pull request merged since the latest release
+#               has the release:minor or release:major label, else patch;
+#               releases nothing when the merged pull request has
+#               release:skip; and releases only when something that ships
+#               changed since the latest release.
 #   LABELS_JSON the pull request's labels as a JSON array; looked up from the
 #               commit's merged pull request when unset
 #   DRY_RUN     true to only report
@@ -42,8 +44,13 @@ if [ -n "$existing" ]; then
 	finish "Not released again: $sha is already tagged $existing"
 fi
 
+pr_labels() {
+	gh api "repos/${GITHUB_REPOSITORY:?}/commits/$1/pulls" --jq '.[] | select(.merged_at != null) | .labels[].name'
+}
+
 latest=$(release_tags | tail -n 1)
 since=$(git hash-object -t tree /dev/null)
+earlier=""
 if [ -n "$latest" ]; then
 	since=$(git rev-list -n 1 "$latest")
 	if git merge-base --is-ancestor "$sha" "$since"; then
@@ -54,6 +61,9 @@ if [ -n "$latest" ]; then
 	if ! git merge-base --is-ancestor "$since" "$sha"; then
 		echo "$latest is on a commit that $sha doesn't contain; comparing their files"
 	fi
+	if git rev-parse -q --verify "$sha^" >/dev/null; then
+		earlier=$(git rev-list --first-parent "$sha^" --not "$since")
+	fi
 else
 	latest=v0.0.0
 fi
@@ -62,12 +72,17 @@ if [ "$bump" = auto ]; then
 	if [ -n "${LABELS_JSON:-}" ]; then
 		labels=$(jq -r '.[]' <<<"$LABELS_JSON")
 	else
-		labels=$(gh api "repos/${GITHUB_REPOSITORY:?}/commits/$sha/pulls" \
-			--jq '.[] | select(.merged_at != null) | .labels[].name')
+		labels=$(pr_labels "$sha")
 	fi
 	if grep -qx 'release:skip' <<<"$labels"; then
 		finish "Not released: the pull request has the release:skip label"
-	elif grep -qx 'release:major' <<<"$labels"; then
+	fi
+	# A release:major or release:minor pull request merged since the latest
+	# release counts too: its own run may have failed.
+	while read -r c; do
+		if [ -n "$c" ]; then labels+=$'\n'$(pr_labels "$c"); fi
+	done <<<"$earlier"
+	if grep -qx 'release:major' <<<"$labels"; then
 		bump="major"
 	elif grep -qx 'release:minor' <<<"$labels"; then
 		bump="minor"
