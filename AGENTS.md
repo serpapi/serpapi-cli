@@ -10,7 +10,7 @@
   2. writes `Formula/serpapi-cli.rb` in `serpapi/homebrew-tap` from those checksums and pushes it as a `serpapi-cli <version>` commit.
 - To release by hand, run the CI workflow on `main` from the Actions tab with a bump (`dry_run` is on by default), or push a lightweight `v*` tag on a `main` commit whose CI passed with no `--- SKIP` in the e2e log; `release.yml` runs on the pushed tag.
 - If a release job fails after the tag was made, re-run the failed jobs of that CI run, or, once the cause is fixed on `main`, run the Release workflow from the Actions tab with that tag. The tag stays.
-- `release.yml` refuses a tag that doesn't point at the tested commit or is older than the newest release (it would become "latest" and roll Homebrew back), and publishes one release at a time.
+- `release.yml` refuses a tag that doesn't point at the tested commit or is older than the newest release (it would become "latest" and roll Homebrew back), and publishes one release at a time. It never builds a complete release again, since a newer Go would change binaries users already have under that version: a re-run only refreshes Homebrew. A partial release, from a failed upload, stops it until its assets are deleted with `gh release delete-asset`.
 - Never move, delete or reuse a published tag: Go's module proxy and checksum database keep the first content they saw for each version, so a moved tag never reaches most `go install` users and fails checksum verification for the rest.
 - v0.2.1 to v0.2.3 are tagged on `go-rewrite`, which `main` doesn't contain; `release-tag.sh` compares files with the latest release, not history.
 - To change a published release's notes: `gh release edit v0.3.0 -R serpapi/serpapi-cli --notes-file <file>`.
