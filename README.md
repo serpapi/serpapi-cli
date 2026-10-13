@@ -140,7 +140,7 @@ Prints the CLI version, as `--version` does.
   {"debug":{"at":"2026-10-09T11:50:55.227Z","elapsed":0.955,"event":"Response: HTTP/2.0 200 OK","data":{"status":200,"proto":"HTTP/2.0","headers":{"Serpapi-Search-Id":"6ac8d51e..."}}}}
   {"debug":{"at":"2026-10-09T11:50:55.234Z","elapsed":0.962,"event":"Server timeline: ...","data":{"sent_to_created_s":0.0,"processing_s":0.0,"processed_to_headers_s":1.2}}}
   ```
-  Server timestamps have one-second resolution, so sub-second deltas in the timeline are noise. When the client waited noticeably longer than `total_time_taken`, a `Note:` event points at the phase that dominated. To send a trace along with a support request: `SERPAPI_DEBUG=1 serpapi search ... > result.json 2> trace.jsonl`.
+  Server timestamps have one-second resolution, so sub-second deltas in the timeline are noise. When the client waited noticeably longer than `total_time_taken`, a `Note:` event points at the phase that dominated, if this machine's clock agrees with SerpApi's: it says so, and names no phase when the timestamps contradict each other. To send a trace along with a support request: `SERPAPI_DEBUG=1 serpapi search ... > result.json 2> trace.jsonl`.
 
 ## Configuration
 

@@ -248,7 +248,8 @@ func (t *tracer) logResponse(resp *http.Response) {
 const searchMetadataTimeLayout = "2006-01-02 15:04:05 MST"
 
 // logSearchMetadata correlates the server-side search_metadata timestamps
-// with the client-side timeline so a stall can be attributed to one of:
+// with the client-side timeline so a stall can be attributed, if this
+// machine's clock agrees with SerpApi's, to one of:
 //   - before the request reached the server (DNS, VPN, proxy, network path)
 //   - server processing (created_at -> processed_at)
 //   - after processing finished but before headers were sent
@@ -290,15 +291,15 @@ func (t *tracer) logSearchMetadata(body []byte) {
 	processing := processedAt.Sub(createdAt)
 	afterProcess := firstByteAt.Sub(processedAt)
 
-	// A search created well before this request was sent is a cached result:
-	// its timestamps describe the original search, not this round trip. 5s
-	// absorbs clock skew between client and server.
+	// A search created well before this request was sent is a cached result,
+	// whose timestamps describe the original search, or this machine's clock
+	// is that far ahead of SerpApi's; the timestamps can't tell which.
 	if beforeCreate < -5*time.Second {
 		t.log(map[string]any{
-			"created_at":   createdAt.Format(time.RFC3339),
-			"processed_at": processedAt.Format(time.RFC3339),
-			"cached":       true,
-		}, "Server timeline: cached result from %s (%.0fs before this request); the %s wait was network round trip only",
+			"created_at":        createdAt.Format(time.RFC3339),
+			"processed_at":      processedAt.Format(time.RFC3339),
+			"sent_to_created_s": round3(beforeCreate.Seconds()),
+		}, "Server timeline: created_at=%s, %.0fs before this request was sent: a cached result, or this machine's clock is ahead of SerpApi's; headers arrived %s after the request was sent",
 			createdAt.Format(time.RFC3339), (-beforeCreate).Seconds(), signedSeconds(firstByteAt.Sub(sentAt)))
 		return
 	}
@@ -315,17 +316,21 @@ func (t *tracer) logSearchMetadata(body []byte) {
 
 	// Flag the phase that dominated when the wait was noticeably longer than
 	// the server's own processing time. 2s absorbs the 1s timestamp
-	// resolution plus typical network latency.
+	// resolution plus typical network latency. The wait and the processing
+	// time each come from one clock; which phase the rest fell in compares
+	// the two, so a skewed clock moves it.
 	const slack = 2 * time.Second
 	waited := firstByteAt.Sub(sentAt)
 	if waited <= time.Duration(m.TotalTimeTaken*float64(time.Second))+slack {
 		return
 	}
 	switch {
+	case beforeCreate < -slack || afterProcess < -slack:
+		t.logf("Note: waited %s for a search SerpApi processed in %gs, but this machine's clock and SerpApi's disagree, so the timeline can't say where the rest went", signedSeconds(waited), m.TotalTimeTaken)
 	case beforeCreate > slack:
-		t.logf("Note: most of the wait (%s) happened before the request reached SerpApi; check the network path (DNS, VPN, proxy, connectivity)", signedSeconds(beforeCreate))
+		t.logf("Note: if this machine's clock matches SerpApi's, most of the wait (%s) happened before the request reached SerpApi; check the network path (DNS, VPN, proxy, connectivity)", signedSeconds(beforeCreate))
 	case afterProcess > slack:
-		t.logf("Note: the response took %s to arrive after SerpApi finished processing; check the network path back to this machine", signedSeconds(afterProcess))
+		t.logf("Note: if this machine's clock matches SerpApi's, the response took %s to arrive after SerpApi finished processing; check the network path back to this machine", signedSeconds(afterProcess))
 	}
 }
 

@@ -270,7 +270,7 @@ func TestDebugFlagsStallBeforeSearchCreation(t *testing.T) {
 	if !strings.Contains(out, "(+9.0s processing)") {
 		t.Errorf("expected 9s processing:\n%s", out)
 	}
-	if !strings.Contains(out, "Note: most of the wait (+21.0s) happened before the request reached SerpApi") {
+	if !strings.Contains(out, "Note: if this machine's clock matches SerpApi's, most of the wait (+21.0s) happened before the request reached SerpApi") {
 		t.Errorf("expected pre-creation stall note:\n%s", out)
 	}
 }
@@ -284,7 +284,7 @@ func TestDebugFlagsStallAfterProcessing(t *testing.T) {
 	if !strings.Contains(out, "headers received +15.0s after processed_at") {
 		t.Errorf("expected 15s post-processing gap:\n%s", out)
 	}
-	if !strings.Contains(out, "Note: the response took +15.0s to arrive after SerpApi finished processing") {
+	if !strings.Contains(out, "Note: if this machine's clock matches SerpApi's, the response took +15.0s to arrive after SerpApi finished processing") {
 		t.Errorf("expected post-processing stall note:\n%s", out)
 	}
 }
@@ -310,14 +310,35 @@ func TestDebugCachedResultIsNotCorrelated(t *testing.T) {
 	tr.logSearchMetadata(body)
 
 	out := buf.String()
-	if !strings.Contains(out, "Server timeline: cached result from 2026-10-09T11:34:00Z (1560s before this request)") {
+	if !strings.Contains(out, "Server timeline: created_at=2026-10-09T11:34:00Z, 1560s before this request was sent: a cached result, or this machine's clock is ahead of SerpApi's") {
 		t.Errorf("expected cached-result timeline:\n%s", out)
 	}
-	if !strings.Contains(out, "the +1.8s wait was network round trip only") {
+	if !strings.Contains(out, "headers arrived +1.8s after the request was sent") {
 		t.Errorf("expected round-trip wait:\n%s", out)
 	}
 	if strings.Contains(out, "Note:") || strings.Contains(out, "after processed_at") {
 		t.Errorf("cached result must not produce a stall diagnosis:\n%s", out)
+	}
+}
+
+// The timeline compares this machine's clock with SerpApi's, so a skewed
+// clock must not come out as a verdict.
+func TestDebugTimelineWithSkewedClocks(t *testing.T) {
+	var buf bytes.Buffer
+	// A fresh search that took 9s, seen from a clock 6s ahead of SerpApi's.
+	tr, body := stallTracer(&buf, -6*time.Second, 9*time.Second, 6500*time.Millisecond)
+	tr.logSearchMetadata(body)
+	if out := buf.String(); strings.Contains(out, "round trip only") || !strings.Contains(out, "or this machine's clock is ahead of SerpApi's") {
+		t.Errorf("a clock 6s ahead must not pass for a cache hit:\n%s", out)
+	}
+
+	buf.Reset()
+	// A 15s stall after processing, seen from a clock 30s behind SerpApi's.
+	tr, body = stallTracer(&buf, 30*time.Second, 2*time.Second, -15*time.Second)
+	tr.logSearchMetadata(body)
+	if out := buf.String(); strings.Contains(out, "before the request reached SerpApi") ||
+		!strings.Contains(out, "Note: waited +17.0s for a search SerpApi processed in 2s, but this machine's clock and SerpApi's disagree") {
+		t.Errorf("timestamps that contradict each other must not blame one side:\n%s", out)
 	}
 }
 
