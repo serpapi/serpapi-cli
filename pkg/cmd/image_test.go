@@ -116,16 +116,42 @@ func TestSearchWithImageSendsItsID(t *testing.T) {
 	wantQuery(t, urls[1], "/search.json", map[string]string{"engine": "google_lens", "image_id": "img123", "api_key": imageKey})
 }
 
-func TestImageUploadTimesOutAsSet(t *testing.T) {
-	// Until it has read the body, the server can't notice the client give up.
-	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		hang(w, r)
-	})
+// An upload has no engine, search or archive entry, so a timed-out upload
+// gets only the retry advice, while the search after it keeps the search's.
+func TestImageTimeoutAdviceFitsTheStep(t *testing.T) {
+	const upload = "Request to /image timed out after 50ms: retry with a higher --timeout, such as --timeout 120, or 0 to wait indefinitely"
+	const search = "Request to /search.json timed out after 50ms. Slow engines, such as google_ai_mode"
+	for _, tc := range []struct {
+		name, slow, msg string
+		args            []string
+	}{
+		{"image", "/image", upload, []string{"image"}},
+		{"search --image, slow upload", "/image", upload, []string{"search", "engine=google_lens", "--image"}},
+		{"search --image, slow search", "/search.json", search, []string{"search", "engine=google_lens", "--image"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				// Until it has read the body, the server can't notice the client give up.
+				_, _ = io.Copy(io.Discard, r.Body)
+				if r.URL.Path == tc.slow {
+					hang(w, r)
+					return
+				}
+				fmt.Fprint(w, `{"image_id":"img123"}`)
+			})
 
-	res := execute(t, "", "--api-key", imageKey, "--timeout", "0.05", "image", writeImage(t, "photo.png", png1x1))
+			args := append([]string{"--api-key", imageKey, "--timeout", "0.05"}, tc.args...)
+			res := execute(t, "", append(args, writeImage(t, "photo.png", png1x1))...)
 
-	wantError(t, res, 1, "network_error", "Request to /image timed out after 50ms")
+			msg, _ := wantError(t, res, 1, "network_error", tc.msg)["message"].(string)
+			wantSearchAdvice := tc.slow == "/search.json"
+			for _, part := range []string{"Slow engines", "The search may still finish on SerpApi's side"} {
+				if strings.Contains(msg, part) != wantSearchAdvice {
+					t.Errorf("message %q: has %q = %v, want %v", msg, part, !wantSearchAdvice, wantSearchAdvice)
+				}
+			}
+		})
+	}
 }
 
 func TestImageNeedsAKeyBeforeUploading(t *testing.T) {

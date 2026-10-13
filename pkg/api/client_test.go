@@ -614,3 +614,25 @@ func TestReadImageStopsPastTheLimit(t *testing.T) {
 		t.Errorf("read %d bytes and kept %d (err %v), want both %d", r.n, len(content), err, MaxImageSize+1)
 	}
 }
+
+// An upload has no engine, search or archive entry, so its timeout advice
+// says only how to retry; every other endpoint keeps the search advice.
+func TestUploadTimeoutAdviceLeavesOutTheSearch(t *testing.T) {
+	retry := "retry with a higher --timeout, such as --timeout 120, or 0 to wait indefinitely; --debug shows which step stalled"
+	search := func(endpoint string) string {
+		return "Request to " + endpoint + " timed out after 50ms. Slow engines, such as google_ai_mode, and no_cache=true can take longer: " +
+			retry + ". The search may still finish on SerpApi's side, count against your searches and be available in your search archive"
+	}
+	for endpoint, want := range map[string]string{
+		"/image":           "Request to /image timed out after 50ms: " + retry,
+		"/search.json":     search("/search.json"),
+		"/account.json":    search("/account.json"),
+		"/locations.json":  search("/locations.json"),
+		archivePath("abc"): search(archivePath("abc")),
+	} {
+		var netErr *clierrors.NetworkError
+		if err := New("secret", WithTimeout(50*time.Millisecond)).networkError(endpoint, osTimeout{}); !errors.As(err, &netErr) || netErr.Message != want {
+			t.Errorf("%s: got %v\nwant %s", endpoint, err, want)
+		}
+	}
+}

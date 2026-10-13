@@ -210,6 +210,14 @@ func (c *Client) networkError(endpoint string, err error) error {
 		if c.debug == nil {
 			debugHint = "; --debug shows which step stalled"
 		}
+		// An upload has no engine, search or archive entry to advise on.
+		if endpoint == "/image" {
+			return &clierrors.NetworkError{
+				Message: fmt.Sprintf("Request to %s timed out after %s: retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s",
+					endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout), debugHint),
+				Cause: cause,
+			}
+		}
 		return &clierrors.NetworkError{
 			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
 				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s. "+
