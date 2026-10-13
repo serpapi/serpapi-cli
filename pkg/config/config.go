@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -17,21 +18,27 @@ type configFile struct {
 	APIKey string `toml:"api_key"`
 }
 
-// Dir returns the directory where the CLI stores its config.
+// Dir returns the directory where the CLI stores its config, or "" when
+// neither the user config directory nor the home directory is an absolute
+// path: a relative one would put the key in, or take it from, wherever the
+// command runs.
 func Dir() string {
-	if dir, err := os.UserConfigDir(); err == nil {
+	if dir, err := os.UserConfigDir(); err == nil && filepath.IsAbs(dir) {
 		return filepath.Join(dir, "serpapi")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".config", "serpapi")
+	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
+		return filepath.Join(home, ".config", "serpapi")
 	}
-	return filepath.Join(home, ".config", "serpapi")
+	return ""
 }
 
-// Path returns the full path to the config file.
+// Path returns the full path to the config file, or "" when Dir is "".
 func Path() string {
-	return filepath.Join(Dir(), "config.toml")
+	dir := Dir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "config.toml")
 }
 
 // ErrNoAPIKey is returned by ResolveAPIKey when no source has a key.
@@ -43,7 +50,11 @@ var ErrNoAPIKey = &clierrors.UsageError{
 // is none. A file that can't be read or parsed is an error naming the file
 // and line; it never quotes the file, which holds the key.
 func LoadAPIKey() (string, error) {
-	data, err := os.ReadFile(Path())
+	path := Path()
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -64,10 +75,20 @@ func LoadAPIKey() (string, error) {
 	return strings.TrimSpace(cfg.APIKey), nil
 }
 
-// SaveConfig writes the API key to the config file atomically.
+// SaveConfig writes the API key to the config file atomically, through a
+// temporary file that only this call creates, so a file left or planted next
+// to the config can't widen its permissions or receive the key.
 func SaveConfig(apiKey string) error {
 	dir := Dir()
-	if err := mkdirSecure(dir); err != nil {
+	if dir == "" {
+		home := "HOME"
+		if runtime.GOOS == "windows" {
+			home = "%AppData%"
+		}
+		return &clierrors.UsageError{Message: "No directory to save the API key in: " + home +
+			" is not set to an absolute path; set it, or pass the key with SERPAPI_KEY instead of saving it"}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return &clierrors.UsageError{Message: "Failed to create config dir: " + err.Error()}
 	}
 
@@ -77,21 +98,35 @@ func SaveConfig(apiKey string) error {
 		return &clierrors.UsageError{Message: err.Error()}
 	}
 
-	finalPath := Path()
-	tmpPath := finalPath + ".tmp"
-
-	if err := writeFileSecure(tmpPath, content); err != nil {
-		return &clierrors.UsageError{Message: err.Error()}
+	// CreateTemp opens a new file with O_EXCL and mode 0600.
+	tmp, err := os.CreateTemp(dir, "config.toml.*.tmp")
+	if err != nil {
+		return &clierrors.UsageError{Message: "Failed to save config: " + err.Error()}
+	}
+	if err := writeSynced(tmp, content); err != nil {
+		os.Remove(tmp.Name())
+		return &clierrors.UsageError{Message: "Failed to save config: " + err.Error()}
 	}
 
 	// os.Rename replaces an existing file on Windows too (MoveFileEx with
 	// MOVEFILE_REPLACE_EXISTING), so the old key stays until the new one lands.
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		os.Remove(tmpPath)
+	if err := os.Rename(tmp.Name(), Path()); err != nil {
+		os.Remove(tmp.Name())
 		return &clierrors.UsageError{Message: "Failed to save config: " + err.Error()}
 	}
 
 	return nil
+}
+
+func writeSynced(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func tomlMarshal(cfg configFile) ([]byte, error) {

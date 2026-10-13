@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,7 +168,7 @@ func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, raw
 	if restricted && isEmptyObject(result) {
 		warnNothingMatched(cmd)
 	}
-	return handleOutput(cmd, result, searchHint)
+	return handleOutput(cmd, result, searchHint(p))
 }
 
 // explainMissingKey adds to a 401 for a search sent without a key how to give
@@ -290,7 +291,10 @@ func searchAllPages(cmd *cobra.Command, client *api.Client, first map[string]str
 		warnNothingMatched(cmd)
 	}
 
-	if err := printMerged(cmd, merged); err != nil {
+	// Pages fetched before Ctrl-C were billed, so --jq still runs on them.
+	printCtx, cancel := printContext(ctx)
+	defer cancel()
+	if err := printMerged(printCtx, cmd, merged, searchHint(first)("")); err != nil {
 		return err
 	}
 	if pageErr == nil {
@@ -310,12 +314,13 @@ func searchAllPages(cmd *cobra.Command, client *api.Client, first map[string]str
 	return annotatePageError(pageErr, pages)
 }
 
-// printMerged prints the merged pages. --jq runs on them directly, and a
-// pipe gets them encoded as they are written, so no encoded copy of every
-// page is ever held in memory.
-func printMerged(cmd *cobra.Command, merged map[string]any) error {
+// printMerged prints the merged pages. --jq runs on them directly until ctx
+// ends, and a pipe gets them encoded as they are written, so no encoded copy
+// of every page is ever held in memory. next is the large-result hint's next
+// step.
+func printMerged(ctx context.Context, cmd *cobra.Command, merged map[string]any, next string) error {
 	if jqFlag != "" {
-		return printJQ(cmd, merged)
+		return printJQ(ctx, cmd, merged)
 	}
 	w := cmd.OutOrStdout()
 	if output.IsTerminal(w) {
@@ -334,7 +339,7 @@ func printMerged(cmd *cobra.Command, merged map[string]any) error {
 		return &clierrors.APIError{Message: "Failed to encode result: " + err.Error()}
 	}
 	sortKeySizes(keys)
-	hintLargeResult(cmd, int(size), keys, searchHint(""))
+	hintLargeResult(cmd, int(size), keys, next)
 	bw := bufio.NewWriterSize(w, 64<<10)
 	if _, err := output.WriteObject(bw, merged, nil); err != nil {
 		return outputError(err)

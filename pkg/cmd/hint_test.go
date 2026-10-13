@@ -28,7 +28,7 @@ func TestLargeResultHintListsTwelveKeysLargestFirst(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	hintLargeJSON(cmd, raw, searchHint)
+	hintLargeJSON(cmd, raw, searchHint(nil))
 
 	var got struct {
 		Warning struct {

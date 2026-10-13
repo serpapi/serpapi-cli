@@ -64,6 +64,13 @@ func searchWith(args ...string) []string { return append(append([]string{}, sear
 func edgeCases() []edgeCase {
 	invalidKey := `{"error":"Invalid API key. Your API key should be here: https://serpapi.com/manage-api-key"}`
 	pages := func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page(pageNumber(r), pageNumber(r) < 3)) }
+	bigPages := func(w http.ResponseWriter, r *http.Request) {
+		next := ""
+		if pageNumber(r) == 1 {
+			next = `"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=10"},`
+		}
+		fmt.Fprint(w, bigResult(next+`"inline_images":[{"position":1}],`, 700))
+	}
 	return []edgeCase{
 		{name: "argv/no parameters", args: []string{"search"}, exit: 2, code: "usage_error", msg: "No search parameters given"},
 		{name: "argv/q and bare words", args: searchWith("tea"), exit: 2, code: "usage_error", msg: "Got both q=... and bare words"},
@@ -202,17 +209,33 @@ func edgeCases() []edgeCase {
 			warn: "keys by size: organic_results 52 KB, search_metadata 24 B. To print only what you need, read the stored search for free: serpapi archive abc123 --jq '.KEY'"},
 		{name: "output/large result without an id", args: search, api: respond(bigResult("", 1500)),
 			warn: "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"},
+		{name: "output/large no_cache result promises no cache hit", args: searchWith("no_cache=true"), api: respond(bigResult("", 1500)),
+			warn: "repeat the command with --jq '.KEY'; no_cache=true makes the repeat a new, counted search"},
+		{name: "output/large no_cache result keeps the free archive", args: searchWith("no_cache=true"), api: respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
+			warn: "read the stored search for free: serpapi archive abc123 --jq '.KEY'"},
+		{name: "output/large no_cache in the API's true words", args: searchWith("no_cache=YES"), api: respond(bigResult("", 1500)),
+			warn: "no_cache=YES makes the repeat a new, counted search"},
+		{name: "output/large no_cache in the API's false words", args: searchWith("no_cache=False"), api: respond(bigResult("", 1500)),
+			warn: "repeat the command with --jq '.KEY': the same search within an hour comes from the cache"},
+		{name: "output/large no_cache in neither list", args: searchWith("no_cache=maybe"), api: respond(bigResult("", 1500)),
+			warn: "repeat the command with --jq '.KEY'; with no_cache=maybe the repeat may be a new, counted search"},
+		{name: "output/large zero_trace result has no archive", args: searchWith("zero_trace=true"), api: respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
+			warn: "repeat the command with --jq '.KEY'; zero_trace=true stores nothing and makes the repeat a new, counted search"},
+		{name: "output/large zero_trace=0 keeps the archive", args: searchWith("zero_trace=0"), api: respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
+			warn: "read the stored search for free: serpapi archive abc123 --jq '.KEY'"},
+		{name: "output/large unsure zero_trace with no_cache=true", args: searchWith("zero_trace=maybe", "no_cache=true"),
+			api:  respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
+			warn: "repeat the command with --jq '.KEY'; no_cache=true makes the repeat a new, counted search"},
 		{name: "output/large result with --jq is quiet", args: searchWith("--jq", ".organic_results | length"),
 			api: respond(bigResult("", 1500)), stdout: "1500\n", quiet: true},
 		{name: "output/large result with --fields still hints", args: searchWith("--fields", "organic_results"),
 			api: respond(bigResult("", 1500)), warn: "Large result: 52 KB"},
-		{name: "output/large merged pages", args: searchWith("--all-pages"), reqs: 2, api: func(w http.ResponseWriter, r *http.Request) {
-			next := ""
-			if pageNumber(r) == 1 {
-				next = `"serpapi_pagination":{"next":"https://serpapi.com/search.json?engine=google&q=coffee&start=10"},`
-			}
-			fmt.Fprint(w, bigResult(next+`"inline_images":[{"position":1}],`, 700))
-		}, warn: "Large result: 48 KB; top-level keys by size: organic_results 48 KB, inline_images 70 B. To print only what you need, repeat the command"},
+		{name: "output/large merged pages", args: searchWith("--all-pages"), reqs: 2, api: bigPages,
+			warn: "Large result: 48 KB; top-level keys by size: organic_results 48 KB, inline_images 70 B. To print only what you need, repeat the command"},
+		{name: "output/large no_cache merged pages", args: searchWith("no_cache=true", "--all-pages"), reqs: 2, api: bigPages,
+			warn: "no_cache=true makes the repeat a new, counted search for each page"},
+		{name: "output/large zero_trace merged pages", args: searchWith("zero_trace=1", "--all-pages"), reqs: 2, api: bigPages,
+			warn: "zero_trace=1 stores nothing and makes the repeat a new, counted search for each page"},
 		{name: "output/large archive", args: []string{"archive", "abc123"}, api: respond(bigResult(`"search_metadata":{"id":"abc123"},`, 1500)),
 			warn: "add --jq '.KEY'; reading the archive is free"},
 		{name: "output/jq printing only null lists the keys", args: searchWith("--jq", ".organic"), api: oneResult, stdout: "\n",
@@ -411,6 +434,58 @@ func TestInterruptDuringAllPagesPrintsFetchedPages(t *testing.T) {
 	}
 }
 
+// interruptAtPage3 serves pages 1 and 2 and cancels ctx once page 3 is asked
+// for, as Ctrl-C during a slow page would.
+func interruptAtPage3(t *testing.T, cancel context.CancelFunc) {
+	t.Helper()
+	reached := make(chan struct{})
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if n := pageNumber(r); n < 3 {
+			fmt.Fprint(w, page(n, true))
+			return
+		}
+		close(reached)
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+	go func() {
+		<-reached
+		cancel()
+	}()
+}
+
+// The pages fetched before Ctrl-C were billed, so --jq still runs on them.
+func TestInterruptDuringAllPagesWithJQPrintsFetchedPages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results | length")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while fetching page 3; pages 1-2 were printed")
+	if res.stdout != "2\n" {
+		t.Errorf("stdout = %q, want --jq's result on the 2 fetched pages", res.stdout)
+	}
+}
+
+// --jq on the fetched pages gets interruptGrace after the signal, no more.
+func TestInterruptDuringAllPagesBoundsAnEndlessJQ(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = 100 * time.Millisecond
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	start := time.Now()
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", "reduce range(1e12) as $i (0; . + 1)")...)
+
+	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %v, want --jq stopped about interruptGrace after the signal", elapsed)
+	}
+}
+
 func TestInterruptBeforeTheResponse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -442,6 +517,119 @@ func TestInterruptDuringJQKeepsWhatItPrinted(t *testing.T) {
 	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
 	if res.stdout != "1\n" {
 		t.Errorf("stdout = %q, want the result printed before the signal", res.stdout)
+	}
+}
+
+// cancelAtEndOf cancels ctx as the client reads the last byte of page n:
+// after the page arrived, before anything is printed.
+func cancelAtEndOf(t *testing.T, n int, cancel context.CancelFunc) {
+	t.Helper()
+	orig := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp, err := orig.RoundTrip(r)
+		if err == nil && pageNumber(r) == n {
+			resp.Body = &onEOF{ReadCloser: resp.Body, do: cancel}
+		}
+		return resp, err
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// onEOF calls do once the body has been read to the end.
+type onEOF struct {
+	io.ReadCloser
+	do func()
+}
+
+func (b *onEOF) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.do()
+	}
+	return n, err
+}
+
+// A signal after the last page arrived, before it was printed, still prints
+// every page: all of them were billed.
+func TestInterruptAfterTheLastPagePrintsThemAll(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page(pageNumber(r), pageNumber(r) < 3)) })
+	t.Setenv("SERPAPI_KEY", "envkey")
+	cancelAtEndOf(t, 3, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results | length")...)
+
+	wantOK(t, res)
+	if res.stdout != "3\n" || ctx.Err() == nil {
+		t.Errorf("stdout = %q, signaled = %v; want --jq's result on all 3 pages after the signal", res.stdout, ctx.Err() != nil)
+	}
+}
+
+func TestInterruptAfterTheResponseStillRunsJQ(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fakeAPI(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, page(1, false)) })
+	t.Setenv("SERPAPI_KEY", "envkey")
+	cancelAtEndOf(t, 1, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--jq", ".organic_results[0].position")...)
+
+	wantOK(t, res)
+	if res.stdout != "1\n" || ctx.Err() == nil {
+		t.Errorf("stdout = %q, signaled = %v; want --jq's result after the signal", res.stdout, ctx.Err() != nil)
+	}
+}
+
+// --jq that fails on the pages fetched before a signal reports its own error:
+// those pages did arrive.
+func TestJQErrorAfterAnInterruptIsReported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	interruptAtPage3(t, cancel)
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results[].position, (.missing | keys)")...)
+
+	wantError(t, res, 2, "usage_error", "keys cannot be applied to: null")
+	if res.stdout != "1\n2\n" {
+		t.Errorf("stdout = %q, want what --jq printed before its error", res.stdout)
+	}
+}
+
+// After a signal, --jq on the fetched pages stops, and flushes what it
+// printed, before the process would exit at interruptGrace.
+func TestInterruptedJQStopsBeforeTheProcessExits(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = time.Second
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	interruptAtPage3(t, func() { cancel(&signaled{at: time.Now()}) })
+	var watchdog lockedBuffer
+	done, returned := make(chan struct{}), make(chan struct{})
+	go func() {
+		exitAfterGrace(ctx, done, func() {}, &watchdog, func(int) {})
+		close(returned)
+	}()
+
+	res := executeContext(t, ctx, "", searchWith("--all-pages", "--jq", ".organic_results[0].position, (reduce range(1e12) as $i (0; . + 1))")...)
+	close(done)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("exitAfterGrace never returned")
+	}
+
+	if got := watchdog.String(); got != "" {
+		t.Errorf("the process would have exited before --jq stopped: %s", got)
+	}
+	wantError(t, res, 130, "interrupted", "Stopped while running --jq")
+	if res.stdout != "1\n" {
+		t.Errorf("stdout = %q, want the value --jq printed before it was stopped", res.stdout)
 	}
 }
 
@@ -495,4 +683,68 @@ func TestExitAfterGrace(t *testing.T) {
 		exitAfterGrace(context.Background(), done, func() { t.Error("stop called without a signal") }, io.Discard,
 			func(code int) { t.Errorf("exit(%d) without a signal", code) })
 	})
+}
+
+// The process exits interruptGrace after the signal, however long the
+// command took to notice it.
+func TestExitAfterGraceCountsFromTheSignal(t *testing.T) {
+	grace := interruptGrace
+	interruptGrace = 2 * time.Second
+	t.Cleanup(func() { interruptGrace = grace })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(&signaled{at: time.Now().Add(-interruptGrace)})
+	exited := make(chan struct{})
+	var stderr lockedBuffer
+	start := time.Now()
+
+	go exitAfterGrace(ctx, make(chan struct{}), func() {}, &stderr, func(int) { close(exited) })
+
+	select {
+	case <-exited:
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("exited %v after the watchdog woke, want at once: the grace had run out", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("never exited")
+	}
+	// The message has a goroutine of its own; outliving this test, it would
+	// race with tests that swap output.IsTerminal.
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(stderr.String(), "Stopped 2s after the signal"); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("stderr = %q, want the watchdog's message", stderr.String())
+		}
+	}
+}
+
+// --jq after a signal stops a quarter of interruptGrace before the process
+// exits, counted from the signal, so a slow decode before printing doesn't
+// push it past the exit.
+func TestPrintDeadlineCountsFromTheSignal(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	at := time.Now().Add(-time.Second)
+	cancel(&signaled{at: at})
+
+	printCtx, stop := printContext(ctx)
+	defer stop()
+
+	want := at.Add(interruptGrace - interruptGrace/4)
+	if d, ok := printCtx.Deadline(); !ok || !d.Equal(want) {
+		t.Errorf("deadline %v (set: %v), want %v", d, ok, want)
+	}
+}
+
+// net/http reports a canceled request with the context's cause, so a signal
+// still reads as a stop before the response.
+func TestSignalBeforeTheResponse(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	fakeAPI(t, func(_ http.ResponseWriter, r *http.Request) {
+		cancel(&signaled{at: time.Now()})
+		<-r.Context().Done()
+	})
+	t.Setenv("SERPAPI_KEY", "envkey")
+
+	res := executeContext(t, ctx, "", search...)
+
+	wantError(t, res, 130, "interrupted", "Stopped before the response arrived")
 }

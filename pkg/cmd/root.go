@@ -79,16 +79,17 @@ limited or out of searches; 5xx SerpApi failed. No status means no usable
 answer: a network_error, such as a timeout, or an unreadable response.
 Requests time out after 60s: --timeout or SERPAPI_TIMEOUT sets seconds, 0
 waits indefinitely.
-Exit 130, code interrupted: stopped by Ctrl-C or SIGTERM, after printing what
-had arrived.
+Exit 130, code interrupted: Ctrl-C or SIGTERM stopped it before it finished,
+after printing what had arrived.
 
 Cost: each successful search counts against your monthly searches, including
 each page of --all-pages; cached, errored and failed ones don't, though errored
 ones count toward the hourly limit (https://serpapi.com/pricing). An identical
 search, --fields included, repeated within an hour comes from the cache.
 no_cache=true forces a new, counted search; cached results are at most an
-hour old, so add it only when that is too old. account, locations and archive
-are free.`,
+hour old, so add it only when that is too old. zero_trace=true (Enterprise)
+stores nothing, so it skips the cache too and leaves no search for archive to
+read. account, locations and archive are free.`,
 	Example: `  serpapi search engine=google q=coffee --fields "organic_results[0:3]"
   serpapi search engine=google coffee shops --jq ".organic_results[].link"
   serpapi search engine=google q=coffee output=md
@@ -111,21 +112,60 @@ are free.`,
 // signal before the process exits anyway.
 var interruptGrace = 3 * time.Second
 
+// signaled is the cause Execute cancels the command's context with, so code
+// that sees the cancellation knows when the signal came.
+type signaled struct{ at time.Time }
+
+func (*signaled) Error() string { return "stopped by Ctrl-C or SIGTERM" }
+
+// Unwrap keeps errors.Is(err, context.Canceled) true for a request it
+// stopped: net/http reports the context's cause, not context.Canceled.
+func (*signaled) Unwrap() error { return context.Canceled }
+
+// exitTime is when the process exits after the first signal: interruptGrace
+// after it. A context canceled without a signal time counts from now.
+func exitTime(ctx context.Context) time.Time {
+	var s *signaled
+	if errors.As(context.Cause(ctx), &s) {
+		return s.at.Add(interruptGrace)
+	}
+	return time.Now().Add(interruptGrace)
+}
+
+// stopRunKey holds, in the command's context, the func that cancels it as a
+// signal does. login calls it for a Ctrl-C that raw mode turns into a key.
+type stopRunKey struct{}
+
+func stopRun(ctx context.Context) {
+	if stop, ok := ctx.Value(stopRunKey{}).(func()); ok {
+		stop()
+	}
+}
+
 // Execute runs the root command. The first Ctrl-C or SIGTERM cancels the
 // command's context so it can print what it has; a second one kills it.
 func Execute() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stop := func() { cancel(&signaled{at: time.Now()}) }
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		stop()
+	}()
+	restoreDefault := func() { signal.Stop(sigs) }
 	done := make(chan struct{})
-	go exitAfterGrace(ctx, done, stop, rootCmd.ErrOrStderr(), os.Exit)
-	code := run(ctx)
+	go exitAfterGrace(ctx, done, restoreDefault, rootCmd.ErrOrStderr(), os.Exit)
+	code := run(context.WithValue(ctx, stopRunKey{}, stop))
 	close(done)
-	stop()
+	restoreDefault()
 	os.Exit(code)
 }
 
 // exitAfterGrace waits for the first signal, restores the default handling
 // so that a second one kills the process, and exits 130 if the command is
-// still running interruptGrace later, as it is when blocked on a full pipe.
+// still running interruptGrace after the signal, as it is when blocked on a
+// full pipe.
 func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stderr io.Writer, exit func(int)) {
 	select {
 	case <-done:
@@ -135,7 +175,7 @@ func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stde
 	stop()
 	select {
 	case <-done:
-	case <-time.After(interruptGrace):
+	case <-time.After(time.Until(exitTime(ctx))):
 		// stderr may be the full pipe, so the message gets a moment, not a promise.
 		go clierrors.FprintError(stderr, &clierrors.InterruptedError{
 			Message: fmt.Sprintf("Stopped %s after the signal; the output may be cut off", interruptGrace),
@@ -146,18 +186,43 @@ func exitAfterGrace(ctx context.Context, done <-chan struct{}, stop func(), stde
 }
 
 // run executes the root command, reports any error on its stderr as JSON and
-// returns the exit code. A command stopped by canceling ctx exits 130.
+// returns the exit code. A request stopped by canceling ctx exits 130; an
+// error from what had already arrived, such as a failing --jq, keeps its own.
 func run(ctx context.Context) int {
+	initHelpCommand()
 	err := rootCmd.ExecuteContext(ctx)
 	if err == nil {
 		return 0
 	}
-	var interrupted *clierrors.InterruptedError
-	if ctx.Err() != nil && !errors.As(err, &interrupted) {
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
 		err = &clierrors.InterruptedError{Message: "Stopped before the response arrived"}
 	}
 	clierrors.FprintError(rootCmd.ErrOrStderr(), err)
 	return clierrors.ExitCode(err)
+}
+
+// initHelpCommand keeps cobra's help command, with its text and completion,
+// but makes an unknown topic a usage error; cobra prints the usage and exits 0.
+// It runs once every command has been added, which cobra needs.
+func initHelpCommand() {
+	rootCmd.InitDefaultHelpCmd()
+	if help, _, err := rootCmd.Find([]string{"help"}); err == nil && help != rootCmd {
+		help.RunE = runHelp
+	}
+}
+
+func runHelp(c *cobra.Command, args []string) error {
+	target, _, err := c.Root().Find(args)
+	if len(args) > 0 && (err != nil || target == c.Root()) {
+		msg := fmt.Sprintf("Unknown help topic %q", strings.Join(args, " "))
+		if s := c.Root().SuggestionsFor(args[0]); len(s) > 0 {
+			return &clierrors.UsageError{Message: msg + "; did you mean " + strings.Join(s, " or ") + "?"}
+		}
+		return &clierrors.UsageError{Message: msg + "; see 'serpapi --help'"}
+	}
+	target.InitDefaultHelpFlag()
+	target.InitDefaultVersionFlag()
+	return target.Help()
 }
 
 func init() {
@@ -318,12 +383,26 @@ func handleOutput(cmd *cobra.Command, raw []byte, next func(id string) string) e
 	if err := dec.Decode(&v); err != nil {
 		return &clierrors.APIError{Message: "Failed to parse response: " + err.Error()}
 	}
-	return printJQ(cmd, v)
+	ctx, cancel := printContext(cmd.Context())
+	defer cancel()
+	return printJQ(ctx, cmd, v)
 }
 
-// printJQ runs --jq on v and prints each result as it is produced. A filter
-// that prints only null gets a warning listing the keys v has.
-func printJQ(cmd *cobra.Command, v any) error {
+// printContext is the context for printing a result that has arrived. After
+// a signal the search was billed, so the result still prints, with --jq
+// stopped a quarter of interruptGrace before the process exits: that leaves
+// it time to flush and report what it printed.
+func printContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil || ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), exitTime(ctx).Add(-interruptGrace/4))
+}
+
+// printJQ runs --jq on v until ctx ends, printing each result as it is
+// produced. A filter that prints only null gets a warning listing the keys v
+// has.
+func printJQ(ctx context.Context, cmd *cobra.Command, v any) error {
 	code, err := jq.Compile(jqFlag)
 	if err != nil {
 		return &clierrors.UsageError{Message: err.Error()}
@@ -333,7 +412,6 @@ func printJQ(cmd *cobra.Command, v any) error {
 	bw := bufio.NewWriter(w)
 	var writeErr error
 	printed, nulls := 0, 0
-	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}

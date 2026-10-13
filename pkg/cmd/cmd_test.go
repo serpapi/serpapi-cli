@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -103,11 +105,17 @@ func execute(t *testing.T, stdin string, args ...string) result {
 // executeContext is execute with a context the test can cancel, as Ctrl-C does.
 func executeContext(t *testing.T, ctx context.Context, stdin string, args ...string) result {
 	t.Helper()
+	return executeInput(t, ctx, strings.NewReader(stdin), args...)
+}
+
+// executeInput is executeContext with any stdin, such as a pipe that stays open.
+func executeInput(t *testing.T, ctx context.Context, stdin io.Reader, args ...string) result {
+	t.Helper()
 	resetFlags(rootCmd)
 	var stdout, stderr bytes.Buffer
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetErr(&stderr)
-	rootCmd.SetIn(strings.NewReader(stdin))
+	rootCmd.SetIn(stdin)
 	// A nil slice would make cobra parse the test binary's own arguments.
 	rootCmd.SetArgs(append([]string{}, args...))
 	code := run(ctx)
@@ -606,6 +614,28 @@ func TestLoginWithoutKey(t *testing.T) {
 	wantError(t, execute(t, "\n", "login"), 2, "usage_error", "No API key given")
 }
 
+// An agent's timeout sends SIGTERM to a login still waiting on an open pipe;
+// it has to stop then, not when the grace period runs out.
+func TestLoginStopsAtOnceWhenInterrupted(t *testing.T) {
+	fakeAPI(t, nil)
+	stdin, writer := io.Pipe()
+	t.Cleanup(func() { writer.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	res := executeInput(t, ctx, stdin, "login")
+
+	wantError(t, res, 130, "interrupted", "Stopped while waiting for the API key on stdin; nothing was saved")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("login took %v to stop, want well under the %v grace period", elapsed, interruptGrace)
+	}
+	if _, err := os.Stat(config.Path()); !os.IsNotExist(err) {
+		t.Errorf("config file after an interrupted login: %v", err)
+	}
+}
+
 // login shows the account's email on a terminal, so it must be as safe there
 // as a search result: a real PTY run printed ESC ] 52 and ESC [ 2J from it.
 func TestAccountEmailIsSafeOnATerminal(t *testing.T) {
@@ -682,11 +712,45 @@ func TestHelpAndVersionGoToStdout(t *testing.T) {
 	}{
 		{[]string{"--help"}, "SERPAPI_KEY"},
 		{[]string{"search", "--help"}, "--all-pages"},
+		{[]string{"help", "search"}, "--all-pages"},
 		{[]string{"--version"}, "serpapi version "},
+		{[]string{"help", "help"}, "Help provides help for any command"},
 	} {
 		res := execute(t, "", tt.args...)
 		if res.code != 0 || res.stderr != "" || !strings.Contains(res.stdout, tt.want) {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q; want %q on stdout", tt.args, res.code, res.stdout, res.stderr, tt.want)
 		}
+	}
+}
+
+// A help topic that doesn't exist is a wrong command: exit 2 and one JSON
+// line, not the usage as plain text with exit 0.
+func TestHelpWithAnUnknownTopic(t *testing.T) {
+	fakeAPI(t, nil)
+
+	for topic, want := range map[string]string{
+		"serach": `Unknown help topic "serach"; did you mean search?`,
+		"nope":   `Unknown help topic "nope"; see 'serpapi --help'`,
+	} {
+		res := execute(t, "", "help", topic)
+
+		errObj := wantError(t, res, 2, "usage_error", want)
+		if errObj["message"] != want {
+			t.Errorf("help %s: message = %q, want %q", topic, errObj["message"], want)
+		}
+		if res.stdout != "" {
+			t.Errorf("help %s: stdout = %q, want empty", topic, res.stdout)
+		}
+	}
+}
+
+// The help command still completes command names, and only them.
+func TestHelpCompletesCommands(t *testing.T) {
+	fakeAPI(t, nil)
+
+	res := execute(t, "", "__complete", "help", "se")
+
+	if res.code != 0 || !strings.HasPrefix(res.stdout, "search\t") || !strings.Contains(res.stdout, "\n:4\n") {
+		t.Errorf("exit %d, stdout %q; want search and directive 4 (no file completion)", res.code, res.stdout)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
@@ -68,7 +70,151 @@ func TestSaveConfigRoundTripAndOverwrite(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("config mode = %v, want 0600", info.Mode().Perm())
 	}
-	if _, err := os.Stat(Path() + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf("temporary file left behind: %v", err)
+	wantNoTempFiles(t)
+}
+
+func wantNoTempFiles(t *testing.T) {
+	t.Helper()
+	left, err := filepath.Glob(filepath.Join(Dir(), "config.toml*tmp"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(left) > 0 {
+		t.Errorf("temporary files left behind: %v", left)
+	}
+}
+
+// A file someone else left or planted at the old fixed temporary name must
+// not decide the saved key's permissions or where the key is written.
+func TestSaveConfigIgnoresFilesAtTheOldTempName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes and symlinks differ on Windows")
+	}
+	isolate(t)
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := Path() + ".tmp"
+	if err := os.WriteFile(stale, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveConfig("stale-key"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(Path()); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("config = %v, %v; want mode 0600 despite a 0644 %s", info, err, filepath.Base(stale))
+	}
+
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveConfig("symlink-key"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "untouched\n" {
+		t.Errorf("symlink target = %q, want it untouched", b)
+	}
+	if info, err := os.Lstat(Path()); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("config = %v, %v; want a regular file", info, err)
+	}
+	if got, err := ResolveAPIKey(""); err != nil || got != "symlink-key" {
+		t.Errorf("ResolveAPIKey = %q, %v; want symlink-key", got, err)
+	}
+}
+
+func TestSaveConfigConcurrently(t *testing.T) {
+	isolate(t)
+	keys := []string{"key-0", "key-1", "key-2", "key-3", "key-4", "key-5", "key-6", "key-7"}
+	errs := make(chan error, len(keys))
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- SaveConfig(key)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("SaveConfig: %v", err)
+		}
+	}
+	got, err := ResolveAPIKey("")
+	if err != nil || !slices.Contains(keys, got) {
+		t.Errorf("ResolveAPIKey = %q, %v; want one of the saved keys", got, err)
+	}
+	wantNoTempFiles(t)
+}
+
+// Without HOME there is no config directory, and a relative one would put the
+// key in, or take it from, whatever directory the command runs in.
+// Without an absolute home directory, the key is neither read from nor saved
+// to a directory relative to wherever the command runs.
+func TestNoConfigDirWithoutAnAbsoluteHome(t *testing.T) {
+	for _, home := range []string{"", ".", filepath.Join("relative", "home")} {
+		for _, name := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "USERPROFILE"} {
+			t.Setenv(name, home)
+		}
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		var planted []string
+		for _, dir := range []string{filepath.Join(home, ".config"), filepath.Join(home, "Library", "Application Support"), home} {
+			path := filepath.Join(dir, "serpapi", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`api_key = "planted-key"`+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			planted = append(planted, path)
+		}
+		before := filesUnder(t, cwd)
+
+		if Dir() != "" || Path() != "" {
+			t.Errorf("home %q: Dir() = %q, Path() = %q; want both empty", home, Dir(), Path())
+		}
+		if key, err := ResolveAPIKey(""); err != ErrNoAPIKey {
+			t.Errorf("home %q: ResolveAPIKey = %q, %v; want ErrNoAPIKey, not a key under the current directory", home, key, err)
+		}
+		err := SaveConfig("new-key")
+		var usageErr *clierrors.UsageError
+		if !errors.As(err, &usageErr) || !strings.Contains(usageErr.Message, "absolute") || !strings.Contains(usageErr.Message, "SERPAPI_KEY") {
+			t.Errorf("home %q: SaveConfig = %v; want a UsageError that asks for an absolute home or SERPAPI_KEY", home, err)
+		}
+		for _, path := range planted {
+			if b, _ := os.ReadFile(path); !strings.Contains(string(b), "planted-key") {
+				t.Errorf("home %q: %s was overwritten: %q", home, path, b)
+			}
+		}
+		if after := filesUnder(t, cwd); !slices.Equal(before, after) {
+			t.Errorf("home %q: files under the current directory changed from %v to %v", home, before, after)
+		}
+	}
+}
+
+func filesUnder(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir(root, func(path string, _ os.DirEntry, err error) error {
+		files = append(files, path)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
