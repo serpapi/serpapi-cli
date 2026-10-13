@@ -48,6 +48,12 @@ pr_labels() {
 	gh api "repos/${GITHUB_REPOSITORY:?}/commits/$1/pulls" --jq '.[] | select(.merged_at != null) | .labels[].name'
 }
 
+# The files between two commits that ship in the binary, tests excluded.
+shipped() {
+	git diff --name-only "$1" "$2" -- cmd pkg internal go.mod go.sum .goreleaser.yml \
+		':(exclude)*_test.go' ':(exclude)*/testdata/*'
+}
+
 latest=$(release_tags | tail -n 1)
 since=$(git hash-object -t tree /dev/null)
 earlier=""
@@ -78,9 +84,10 @@ if [ "$bump" = auto ]; then
 		finish "Not released: the pull request has the release:skip label"
 	fi
 	# A release:major or release:minor pull request merged since the latest
-	# release counts too: its own run may have failed.
+	# release counts too, since its own run may have failed, but only if it
+	# changed what ships: a docs-only one released nothing.
 	while read -r c; do
-		if [ -n "$c" ]; then labels+=$'\n'$(pr_labels "$c"); fi
+		if [ -n "$c" ] && [ -n "$(shipped "$c^" "$c")" ]; then labels+=$'\n'$(pr_labels "$c"); fi
 	done <<<"$earlier"
 	if grep -qx 'release:major' <<<"$labels"; then
 		bump="major"
@@ -89,9 +96,7 @@ if [ "$bump" = auto ]; then
 	else
 		bump="patch"
 	fi
-	shipped=$(git diff --name-only "$since" "$sha" -- cmd pkg internal go.mod go.sum .goreleaser.yml \
-		':(exclude)*_test.go' ':(exclude)*/testdata/*')
-	if [ -z "$shipped" ]; then
+	if [ -z "$(shipped "$since" "$sha")" ]; then
 		finish "Not released: nothing that ships changed since $latest, only docs, tests or CI"
 	fi
 fi
