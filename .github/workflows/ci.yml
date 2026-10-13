@@ -74,8 +74,16 @@ jobs:
   # After the tests pass on main, release-tag.sh tags the commit with the next
   # version, and release.yml releases it. A tag pushed with GITHUB_TOKEN
   # doesn't start release.yml's tag trigger, so this run calls it.
+  release-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: python3 .github/scripts/release-tag-test.py
+
   tag:
-    needs: [test, e2e]
+    needs: [test, e2e, release-script]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
