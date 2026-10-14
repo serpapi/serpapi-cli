@@ -172,6 +172,28 @@ func TestImageWithImageIDIsAUsageError(t *testing.T) {
 	wantError(t, res, 2, "usage_error", "Use either --image or image_id=<id>, not both")
 }
 
+// Only Google Lens takes image_id, so --image with any other engine, or the
+// default google, is refused before the upload rather than after it.
+func TestSearchWithImageRefusesOtherEnginesUnsent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		msg  string
+	}{
+		{"no engine", nil, "--image needs engine=google_lens"},
+		{"empty engine", []string{"engine="}, "--image needs engine=google_lens"},
+		{"engine=google", []string{"engine=google"}, "not engine=google; for another engine, upload with 'serpapi image FILE'"},
+		{"engine=bing_reverse_image", []string{"engine=bing_reverse_image"}, "not engine=bing_reverse_image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeAPI(t, nil)
+			args := append([]string{"--api-key", imageKey, "search", "q=cat"}, tc.args...)
+			res := execute(t, "", append(args, "--image", writeImage(t, "photo.png", png1x1))...)
+			wantError(t, res, 2, "usage_error", tc.msg)
+		})
+	}
+}
+
 func TestImageRefusesEmptyAndOversizedImagesUnsent(t *testing.T) {
 	big := append(append([]byte{}, png1x1...), make([]byte, 600<<10)...)
 	for _, tc := range []struct {

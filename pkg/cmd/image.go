@@ -19,7 +19,8 @@ The image_id can be passed to Search API engines that accept uploaded images,
 such as google_lens. Supported formats are JPG/JPEG, PNG and WebP up to 500 KB.
 Uploaded image IDs expire after 10 minutes.
 
-To upload and search in a single step, use "serpapi search --image <file>" instead.
+To upload and search Google Lens in one step, use
+"serpapi search engine=google_lens --image <file>" instead.
 
 Pass "-" as the file to read the image from standard input.`,
 	Example: `  serpapi image ./photo.jpg

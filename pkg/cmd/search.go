@@ -93,7 +93,7 @@ with 'serpapi archive ID'.`,
 func init() {
 	searchCmd.Flags().BoolVar(&allPagesFlag, "all-pages", false, "follow pagination and merge the arrays of every page")
 	searchCmd.Flags().IntVar(&maxPagesFlag, "max-pages", defaultMaxPages, "page limit for --all-pages; each page is one search")
-	searchCmd.Flags().StringVar(&imageFlag, "image", "", "Upload an image file (or - for stdin) and search with its image_id, e.g. for engine=google_lens")
+	searchCmd.Flags().StringVar(&imageFlag, "image", "", "Upload an image file (or - for stdin) and search with its image_id; needs engine=google_lens")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -109,6 +109,15 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	p := params.ParamsToMap(parsed)
 	if _, exists := p["image_id"]; exists && imageFlag != "" {
 		return &clierrors.UsageError{Message: "Use either --image or image_id=<id>, not both"}
+	}
+	// Only Google Lens documents image_id; other engines would ignore it and
+	// run an unrelated search after the upload.
+	if e := p["engine"]; imageFlag != "" && e != "google_lens" {
+		if e == "" {
+			return &clierrors.UsageError{Message: "--image needs engine=google_lens"}
+		}
+		return &clierrors.UsageError{Message: "--image works only with engine=google_lens, not engine=" + e +
+			"; for another engine, upload with 'serpapi image FILE' and pass image_id=<id>"}
 	}
 
 	maxPagesSet := cmd.Flags().Changed("max-pages")

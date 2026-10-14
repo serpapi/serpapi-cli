@@ -70,7 +70,7 @@ serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq '.organic_r
 
 #### Image Search (Google Lens)
 
-- `--image <file>` — Upload an image with the [Image API](https://serpapi.com/image-api) and search with its `image_id` in one step. Use `-` to read the image from stdin.
+- `--image <file>` — Upload an image with the [Image API](https://serpapi.com/image-api) and search with its `image_id` in one step. Use `-` to read the image from stdin. Only `engine=google_lens` takes an `image_id`, so other engines are refused before the upload; to pass an upload to another engine, use [`serpapi image`](#image) and `image_id=<id>`.
 
 ```bash
 # Reverse image search with Google Lens
