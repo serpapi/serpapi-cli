@@ -373,3 +373,36 @@ func TestDebugNoMetadataLineForNonSearchEndpoints(t *testing.T) {
 		t.Errorf("account endpoint should not emit search correlation:\n%s", buf.String())
 	}
 }
+
+// An upload is traced like a search: as the POST it is, with the connection
+// lifecycle, and without the API key, which travels in the multipart body.
+func TestDebugTracesUploadAsPost(t *testing.T) {
+	var buf bytes.Buffer
+	srv := newTestServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		_, _ = rw.Write([]byte(`{"image_id":"img1"}`))
+	})
+	client := New("secret_key", WithBaseURL(srv.URL), WithTimeout(5*time.Second), WithDebug(&buf, false))
+
+	if _, err := client.UploadImageBytes(context.Background(), png1x1, "photo.png"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"POST " + srv.URL + "/image",
+		"Timeout: 5s",
+		"Connecting:",
+		"Using connection:",
+		"Request sent, waiting for response headers",
+		"Response: HTTP/1.1 200 OK",
+		"Body received: 19 bytes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("debug output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "GET ") || strings.Contains(out, "secret_key") {
+		t.Errorf("upload traced as a GET or with the key:\n%s", out)
+	}
+}
