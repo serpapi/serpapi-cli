@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -421,6 +422,23 @@ func TestTimeoutAdviceRaisesTheLimit(t *testing.T) {
 		var netErr *clierrors.NetworkError
 		if !errors.As(err, &netErr) || !strings.Contains(netErr.Message, want) {
 			t.Errorf("limit %s: got %v, want it to contain %q", limit, err, want)
+		}
+	}
+}
+
+// The timeout advice points to --debug only while the trace is off.
+func TestTimeoutAdvicePointsToDebugWhenItIsOff(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		c := New("secret", WithTimeout(time.Second))
+		if debug {
+			WithDebug(io.Discard, false)(c)
+		}
+		var netErr *clierrors.NetworkError
+		if err := c.networkError("/search.json", osTimeout{}); !errors.As(err, &netErr) {
+			t.Fatalf("debug %v: got %v, want a NetworkError", debug, err)
+		}
+		if suggests := strings.Contains(netErr.Message, "--debug shows which step stalled"); suggests == debug {
+			t.Errorf("debug %v: message %q", debug, netErr.Message)
 		}
 	}
 }

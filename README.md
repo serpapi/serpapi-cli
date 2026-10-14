@@ -111,7 +111,7 @@ Prints the CLI version, as `--version` does.
 - `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
 - `--fields <expr>`: search only; see [search](#search).
 - `--api-key <key>`: API key. Prefer `SERPAPI_KEY`, since flags show up in `ps` and shell history.
-- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
+- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out, and add `--debug` to see which step stalled. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
   ```bash
   # Give an AI Mode query up to two minutes
   serpapi search --timeout 120 engine=google_ai_mode q="..."
@@ -119,6 +119,28 @@ Prints the CLI version, as `--version` does.
   # Or set it once for the shell session
   export SERPAPI_TIMEOUT=120
   ```
+- `--debug`: trace each request on stderr (env `SERPAPI_DEBUG=1`): DNS, TCP connect (local and remote address), TLS handshake, time to first byte, response status and headers (including `Serpapi-Search-Id` and `X-Request-Id`), body size, and, for searches, the server's `search_metadata` timeline correlated with the client's, so you can see whether a long wait happened on the network path before SerpApi received the request, during processing, or while the response travelled back. Each line carries a UTC timestamp and the seconds elapsed since the request started; the API key is redacted; stdout is untouched, so `--jq` and piping still work. On a terminal the trace is plain text:
+  ```
+  [debug] 2026-10-09T11:50:54.272Z + 0.000s GET https://serpapi.com/search.json?api_key=[REDACTED]&engine=google&q=coffee
+  [debug] 2026-10-09T11:50:54.272Z + 0.000s Timeout: 60s
+  [debug] 2026-10-09T11:50:54.300Z + 0.028s DNS resolved: 162.159.142.21, 172.66.2.17
+  [debug] 2026-10-09T11:50:54.346Z + 0.074s TLS handshake done: TLS 1.3, ALPN="h2"
+  [debug] 2026-10-09T11:50:54.413Z + 0.141s Using connection: 192.168.1.20:62494 -> 162.159.142.21:443 (new)
+  [debug] 2026-10-09T11:50:54.414Z + 0.142s Request sent, waiting for response headers
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s First response byte received
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s Response: HTTP/2.0 200 OK
+  [debug] 2026-10-09T11:50:55.227Z + 0.955s   Serpapi-Search-Id: 6ac8d51eaf5fdcac5434ae91
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Body received: 57483 bytes
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Server search: id=6ac8d51eaf5fdcac5434ae91 status=Success total_time_taken=0.5s
+  [debug] 2026-10-09T11:50:55.234Z + 0.962s Server timeline: created_at=11:50:54Z (+0.0s after request sent), processed_at=11:50:54Z (+0.0s processing), headers received +1.2s after processed_at
+  ```
+  Piped or redirected, stderr stays one JSON object per line, so scripts that parse it keep working; headers and the timeline travel as structured `data`:
+  ```
+  {"debug":{"at":"2026-10-09T11:50:54.414Z","elapsed":0.142,"event":"Request sent, waiting for response headers"}}
+  {"debug":{"at":"2026-10-09T11:50:55.227Z","elapsed":0.955,"event":"Response: HTTP/2.0 200 OK","data":{"status":200,"proto":"HTTP/2.0","headers":{"Serpapi-Search-Id":"6ac8d51e..."}}}}
+  {"debug":{"at":"2026-10-09T11:50:55.234Z","elapsed":0.962,"event":"Server timeline: ...","data":{"sent_to_created_s":0.0,"processing_s":0.0,"processed_to_headers_s":1.2}}}
+  ```
+  Server timestamps have one-second resolution, so sub-second deltas in the timeline are noise. When the client waited noticeably longer than `total_time_taken`, a `Note:` event points at the phase that dominated, if this machine's clock agrees with SerpApi's: it says so, and names no phase when the timestamps contradict each other. To send a trace along with a support request: `SERPAPI_DEBUG=1 serpapi search ... > result.json 2> trace.jsonl`.
 
 ## Configuration
 
@@ -145,10 +167,11 @@ A config file that can't be read or isn't valid TOML is reported by path and lin
 
 - **stdout carries only results**: JSON indented by two spaces, colored on a terminal. Piped, it is indented too, so `head`, `grep` and file viewers show whole lines; `head` cuts the JSON short, so take parts with `--jq`. A terminal gets control characters from results escaped, so a page can't drive it; piped output keeps them. Shrink them on the server with `--fields`, then locally with `--jq`, or ask for `output=md`.
 - **Unfamiliar engine?** Responses are often 20–300 KB, and one key can be large too (Maps `place_results` holds reviews and photos). Piped without `--jq`, a result over 16 KB comes with a warning on stderr that lists its top-level keys by size, unless stderr goes into the same pipe (`2>&1`), where it would break a JSON parser. Print a sample with one item per array, `--jq 'walk(if type == "array" then .[:1] else . end)'`; nested arrays are cut too, so it shows the shape, not the answer. Then take what you need from the stored search for free: `serpapi archive SEARCH_METADATA_ID --jq '...'`.
-- **Errors and warnings go to stderr**, one JSON object per line:
+- **Errors and warnings go to stderr**, one JSON object per line; so does the `--debug` trace, as `{"debug":{...}}` lines, when stderr is not a terminal:
   ```
   {"error":{"code":"api_error","message":"Invalid API key. ...","status":401}}
   {"warning":{"message":"..."}}
+  {"debug":{"at":"2026-10-09T11:50:54.414Z","elapsed":0.142,"event":"Request sent, waiting for response headers"}}
   ```
 - **The exit code says what to do next**:
 

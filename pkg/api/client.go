@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
@@ -36,6 +37,10 @@ type Client struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+
+	// debug, if set, receives a trace of each request; see WithDebug.
+	debug     io.Writer
+	debugJSON bool
 }
 
 // Option configures a Client.
@@ -82,6 +87,12 @@ func userAgent() string {
 
 // get performs a GET request and returns the body of a 200 response verbatim.
 func (c *Client) get(ctx context.Context, endpoint string, params map[string]string) ([]byte, error) {
+	return c.getTraced(ctx, endpoint, params, c.newTracer())
+}
+
+// getTraced is get with a caller-supplied tracer, so Search can keep logging
+// against the same timeline after the body is read.
+func (c *Client) getTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) ([]byte, error) {
 	u, err := url.Parse(c.baseURL + endpoint)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid URL: " + err.Error(), Cause: err}
@@ -93,22 +104,31 @@ func (c *Client) get(ctx context.Context, endpoint string, params map[string]str
 	}
 	u.RawQuery = q.Encode()
 
+	if tr != nil {
+		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid request: " + endpoint, Cause: err}
 	}
 	req.Header.Set("User-Agent", userAgent())
+	tr.logRequest(req, c.http.Timeout)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		tr.logf("Request failed: %v", err)
 		return nil, c.networkError(endpoint, err)
 	}
 	defer resp.Body.Close()
+	tr.logResponse(resp)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBytes)+1))
 	if err != nil {
+		tr.logf("Read body failed: %v", err)
 		return nil, c.networkError(endpoint, err)
 	}
+	tr.logf("Body received: %d bytes", len(body))
 
 	if resp.StatusCode != http.StatusOK {
 		message := fmt.Sprintf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
@@ -132,11 +152,15 @@ func (c *Client) networkError(endpoint string, err error) error {
 	}
 	var netErr net.Error
 	if c.http.Timeout > 0 && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())) {
+		debugHint := ""
+		if c.debug == nil {
+			debugHint = "; --debug shows which step stalled"
+		}
 		return &clierrors.NetworkError{
 			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
-				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely. "+
+				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s. "+
 				"The search may still finish on SerpApi's side, count against your searches and be available in your search archive",
-				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout)),
+				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout), debugHint),
 			Cause: cause,
 		}
 	}
@@ -177,7 +201,11 @@ func errorMessage(body []byte) string {
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
-	body, err := c.get(ctx, endpoint, params)
+	return c.getJSONTraced(ctx, endpoint, params, c.newTracer())
+}
+
+func (c *Client) getJSONTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) (json.RawMessage, error) {
+	body, err := c.getTraced(ctx, endpoint, params, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -203,13 +231,23 @@ func (c *Client) searchParams(params map[string]string) map[string]string {
 
 // Search performs a search request. If the client has an API key it is added to params.
 func (c *Client) Search(ctx context.Context, params map[string]string) (json.RawMessage, error) {
-	return c.getObject(ctx, "/search.json", c.searchParams(params))
+	tr := c.newTracer()
+	body, err := c.getObjectTraced(ctx, "/search.json", c.searchParams(params), tr)
+	if err != nil {
+		return nil, err
+	}
+	tr.logSearchMetadata(body)
+	return body, nil
 }
 
 // getObject is getJSON for endpoints that answer with a JSON object, so a
 // stray null or array is an error rather than an empty-looking success.
 func (c *Client) getObject(ctx context.Context, endpoint string, params map[string]string) (json.RawMessage, error) {
-	body, err := c.getJSON(ctx, endpoint, params)
+	return c.getObjectTraced(ctx, endpoint, params, c.newTracer())
+}
+
+func (c *Client) getObjectTraced(ctx context.Context, endpoint string, params map[string]string, tr *tracer) (json.RawMessage, error) {
+	body, err := c.getJSONTraced(ctx, endpoint, params, tr)
 	if err != nil {
 		return nil, err
 	}
