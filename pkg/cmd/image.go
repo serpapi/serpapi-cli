@@ -12,12 +12,15 @@ import (
 var imageCmd = &cobra.Command{
 	Use:     "image <file>",
 	Aliases: []string{"upload-image"},
-	Short:   "Upload an image for use with image search engines like Google Lens",
+	Short:   "Upload an image for a Google Lens search",
 	Long: `Upload an image with the SerpApi Image API and print the resulting image_id.
 
-The image_id can be passed to Search API engines that accept uploaded images,
-such as google_lens. Supported formats are JPG/JPEG, PNG and WebP up to 500 KB.
-Uploaded image IDs expire after 10 minutes.
+The image_id works only with engine=google_lens, for 10 minutes. Supported
+formats are JPG/JPEG, PNG and WebP up to 500 KB.
+
+An upload doesn't count against your searches, but it needs searches left this
+month and this hour, and uploads have their own hourly limit:
+account_rate_limit_per_hour in "serpapi account".
 
 To upload and search Google Lens in one step, use
 "serpapi search engine=google_lens --image <file>" instead.

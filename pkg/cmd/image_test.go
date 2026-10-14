@@ -182,15 +182,31 @@ func TestSearchWithImageRefusesOtherEnginesUnsent(t *testing.T) {
 	}{
 		{"no engine", nil, "--image needs engine=google_lens"},
 		{"empty engine", []string{"engine="}, "--image needs engine=google_lens"},
-		{"engine=google", []string{"engine=google"}, "not engine=google; for another engine, upload with 'serpapi image FILE'"},
+		{"engine=google", []string{"engine=google"}, "--image works only with engine=google_lens, not engine=google; other engines drop image_id and search without the image"},
 		{"engine=bing_reverse_image", []string{"engine=bing_reverse_image"}, "not engine=bing_reverse_image"},
+		{"url as well", []string{"engine=google_lens", "url=https://example.com/a.png"}, "Use either --image or url=<url>, not both"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeAPI(t, nil)
 			args := append([]string{"--api-key", imageKey, "search", "q=cat"}, tc.args...)
 			res := execute(t, "", append(args, "--image", writeImage(t, "photo.png", png1x1))...)
-			wantError(t, res, 2, "usage_error", tc.msg)
+			msg, _ := wantError(t, res, 2, "usage_error", tc.msg)["message"].(string)
+			if strings.Contains(msg, "pass image_id") {
+				t.Errorf("message %q suggests image_id for an engine that drops it", msg)
+			}
 		})
+	}
+}
+
+// SerpApi lowercases the engine, so --image takes google_lens in any case.
+func TestSearchWithImageTakesGoogleLensInAnyCase(t *testing.T) {
+	reqs, uploads := imageAPI(t)
+
+	res := execute(t, "", "--api-key", imageKey, "search", "engine=Google_Lens", "--image", writeImage(t, "photo.png", png1x1))
+
+	wantOK(t, res)
+	if n, u := len(reqs.list()), len(uploads()); n != 2 || u != 1 {
+		t.Errorf("got %d requests and %d uploads, want the upload, then the search", n, u)
 	}
 }
 

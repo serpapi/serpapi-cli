@@ -70,7 +70,7 @@ serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq '.organic_r
 
 #### Image Search (Google Lens)
 
-- `--image <file>` — Upload an image with the [Image API](https://serpapi.com/image-api) and search with its `image_id` in one step. Use `-` to read the image from stdin. Only `engine=google_lens` takes an `image_id`, so other engines are refused before the upload; to pass an upload to another engine, use [`serpapi image`](#image) and `image_id=<id>`.
+- `--image <file>` — Upload an image with the [Image API](https://serpapi.com/image-api) and search with its `image_id` in one step. Use `-` to read the image from stdin. Only `engine=google_lens` takes an `image_id`: other engines drop it and would run a normal search without the image, so they are refused before the upload, and so is `url=`.
 
 ```bash
 # Reverse image search with Google Lens
@@ -112,7 +112,7 @@ serpapi account --jq .total_searches_left
 
 ### image
 
-Upload an image with the [Image API](https://serpapi.com/image-api) and print its `image_id` without searching. Useful when you want to reuse the same upload across several searches; image IDs expire after 10 minutes. For a one-off search, prefer `serpapi search --image <file>`.
+Upload an image with the [Image API](https://serpapi.com/image-api) and print its `image_id` without searching. Useful when you want to reuse the same upload across several `engine=google_lens` searches, the only engine that takes an `image_id`; image IDs expire after 10 minutes. For a one-off search, prefer `serpapi search engine=google_lens --image <file>`.
 
 ```bash
 # Upload an image file
@@ -124,7 +124,7 @@ curl -s https://example.com/photo.jpg | serpapi image -
 # Reuse the image_id across searches
 IMAGE_ID=$(serpapi image ./photo.jpg --jq .image_id)
 serpapi search engine=google_lens image_id=$IMAGE_ID
-serpapi search engine=google_lens image_id=$IMAGE_ID type=products
+serpapi search engine=google_lens image_id=$IMAGE_ID type=exact_matches
 ```
 
 ### login
@@ -217,7 +217,7 @@ A config file that can't be read or isn't valid TOML is reported by path and lin
   | 1 | `network_error` | No answer, such as a timeout. |
   | 130 | `interrupted` | Ctrl-C or SIGTERM stopped it before it finished, after printing what had arrived, such as the `--all-pages` pages fetched so far. |
 
-- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free.
+- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free, and so is an `image` upload, though it needs searches left this month and this hour, and has its own hourly limit, `account_rate_limit_per_hour` in `serpapi account`.
 - **No prompts without a terminal.** Only `serpapi login` and an image given as `-` (`serpapi image -`, `search --image -`) read stdin. `login` waits for the first line, so pipe the key in (`printf %s "$KEY" | serpapi login`) or, simpler, set `SERPAPI_KEY`; an image is read until stdin closes.
 
 ## Links

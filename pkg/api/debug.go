@@ -121,7 +121,7 @@ func round3(f float64) float64 {
 
 // clientTrace returns httptrace hooks that report each connection phase.
 // DNS/connect hooks are not fired for connections made via an HTTP proxy;
-// GotConn still is, which is why the proxy is logged separately in get.
+// GotConn still is, which is why logRequest reports the proxy.
 func (t *tracer) clientTrace() *httptrace.ClientTrace {
 	if t == nil {
 		return nil

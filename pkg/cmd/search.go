@@ -110,14 +110,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if _, exists := p["image_id"]; exists && imageFlag != "" {
 		return &clierrors.UsageError{Message: "Use either --image or image_id=<id>, not both"}
 	}
-	// Only Google Lens documents image_id; other engines would ignore it and
-	// run an unrelated search after the upload.
-	if e := p["engine"]; imageFlag != "" && e != "google_lens" {
+	// SerpApi takes image_id only on google_lens, whatever the case; other
+	// engines drop it and would run a normal, counted search after the upload.
+	if e := p["engine"]; imageFlag != "" && !strings.EqualFold(e, "google_lens") {
 		if e == "" {
 			return &clierrors.UsageError{Message: "--image needs engine=google_lens"}
 		}
 		return &clierrors.UsageError{Message: "--image works only with engine=google_lens, not engine=" + e +
-			"; for another engine, upload with 'serpapi image FILE' and pass image_id=<id>"}
+			"; other engines drop image_id and search without the image"}
+	}
+	if _, exists := p["url"]; exists && imageFlag != "" {
+		return &clierrors.UsageError{Message: "Use either --image or url=<url>, not both"}
 	}
 
 	maxPagesSet := cmd.Flags().Changed("max-pages")
