@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/textproto"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +35,10 @@ const (
 
 // maxResponseBytes caps the response body; a variable so tests can lower it.
 var maxResponseBytes = 100 << 20
+
+// quoteEscaper mirrors the escaping mime/multipart applies to form-data
+// header values.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
 
 // Client is an HTTP client for the SerpApi service.
 type Client struct {
@@ -112,6 +120,52 @@ func (c *Client) getTraced(ctx context.Context, endpoint string, params map[stri
 	if err != nil {
 		return nil, &clierrors.NetworkError{Message: "Invalid request: " + endpoint, Cause: err}
 	}
+	return c.do(req, endpoint, tr)
+}
+
+// doPostMultipart sends a multipart/form-data POST request. params are sent as
+// form fields alongside a single file part named fieldName.
+func (c *Client) doPostMultipart(ctx context.Context, endpoint string, params map[string]string, fieldName, fileName string, content []byte, tr *tracer) ([]byte, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range params {
+		if err := w.WriteField(k, v); err != nil {
+			return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+		}
+	}
+
+	// CreateFormFile hardcodes application/octet-stream, so build the part
+	// header by hand to send the sniffed image content type.
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`,
+		quoteEscaper.Replace(fieldName), quoteEscaper.Replace(fileName)))
+	h.Set("Content-Type", http.DetectContentType(content))
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+	if _, err := part.Write(content); err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+	if err := w.Close(); err != nil {
+		return nil, &clierrors.NetworkError{Message: "Failed to encode request: " + err.Error(), Cause: err}
+	}
+
+	if tr != nil {
+		ctx = httptrace.WithClientTrace(ctx, tr.clientTrace())
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+endpoint, &body)
+	if err != nil {
+		return nil, &clierrors.NetworkError{Message: "Invalid request: " + endpoint, Cause: err}
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	return c.do(req, endpoint, tr)
+}
+
+// do sends req and returns the body of a 200 response verbatim, logging each
+// step to tr, which may be nil.
+func (c *Client) do(req *http.Request, endpoint string, tr *tracer) ([]byte, error) {
 	req.Header.Set("User-Agent", userAgent())
 	tr.logRequest(req, c.http.Timeout)
 
@@ -155,6 +209,14 @@ func (c *Client) networkError(endpoint string, err error) error {
 		debugHint := ""
 		if c.debug == nil {
 			debugHint = "; --debug shows which step stalled"
+		}
+		// An upload has no engine, search or archive entry to advise on.
+		if endpoint == "/image" {
+			return &clierrors.NetworkError{
+				Message: fmt.Sprintf("Request to %s timed out after %s: retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s",
+					endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout), debugHint),
+				Cause: cause,
+			}
 		}
 		return &clierrors.NetworkError{
 			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
@@ -291,6 +353,78 @@ func (c *Client) Locations(ctx context.Context, params map[string]string) (json.
 		return nil, &clierrors.APIError{Message: "Unexpected response from locations endpoint"}
 	}
 	return body, nil
+}
+
+// UploadImage uploads an image file using the Image API. The returned payload
+// contains an image_id usable with engines that accept uploaded images, such
+// as google_lens. Image IDs expire after 10 minutes.
+func (c *Client) UploadImage(ctx context.Context, path string) (json.RawMessage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, &clierrors.UsageError{Message: "Cannot read image file: " + err.Error()}
+	}
+	defer f.Close()
+	content, err := ReadImage(f)
+	if err != nil {
+		return nil, &clierrors.UsageError{Message: "Cannot read image file: " + err.Error()}
+	}
+	return c.UploadImageBytes(ctx, content, filepath.Base(path))
+}
+
+// MaxImageSize is the Image API's 500 KB limit, read as 500 KiB so the CLI
+// never refuses an image the API would take.
+const MaxImageSize = 500 << 10
+
+// ReadImage reads an image to upload, stopping one byte past MaxImageSize:
+// UploadImageBytes refuses a larger one, which needn't be read whole.
+func ReadImage(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, MaxImageSize+1))
+}
+
+// UploadImageBytes uploads an in-memory image using the Image API. fileName
+// is sent as the multipart filename; when empty, one is derived from the
+// detected content type.
+func (c *Client) UploadImageBytes(ctx context.Context, content []byte, fileName string) (json.RawMessage, error) {
+	switch {
+	case len(content) == 0:
+		return nil, &clierrors.UsageError{Message: "The image is empty"}
+	case len(content) > MaxImageSize:
+		return nil, &clierrors.UsageError{Message: "The image is over 500 KB, the Image API's limit; resize or compress it"}
+	}
+	if fileName == "" {
+		fileName = defaultImageFileName(content)
+	}
+
+	params := map[string]string{}
+	if c.apiKey != "" {
+		params["api_key"] = c.apiKey
+	}
+
+	body, err := c.doPostMultipart(ctx, "/image", params, "image", fileName, content, c.newTracer())
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(body) {
+		return nil, &clierrors.APIError{Message: "Unexpected non-JSON response from server"}
+	}
+	if msg := errorMessage(body); msg != "" {
+		return nil, &clierrors.APIError{Message: msg, Status: http.StatusOK}
+	}
+	return json.RawMessage(body), nil
+}
+
+// defaultImageFileName picks a filename with an extension matching the
+// sniffed image type, for uploads that have no natural filename (e.g. stdin).
+func defaultImageFileName(content []byte) string {
+	switch http.DetectContentType(content) {
+	case "image/jpeg":
+		return "image.jpg"
+	case "image/png":
+		return "image.png"
+	case "image/webp":
+		return "image.webp"
+	}
+	return "image"
 }
 
 // Archive retrieves a previous search by ID.

@@ -202,7 +202,7 @@ func (t *tracer) logRequest(req *http.Request, timeout time.Duration) {
 	if t == nil {
 		return
 	}
-	t.logf("GET %s", req.URL.String())
+	t.logf("%s %s", req.Method, req.URL.String())
 	t.logf("User-Agent: %s", req.UserAgent())
 	if timeout > 0 {
 		t.logf("Timeout: %gs", timeout.Seconds())

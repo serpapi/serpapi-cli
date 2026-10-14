@@ -24,6 +24,7 @@ import (
 var (
 	allPagesFlag bool
 	maxPagesFlag int
+	imageFlag    string
 )
 
 const defaultMaxPages = 100
@@ -83,7 +84,8 @@ with 'serpapi archive ID'.`,
   serpapi search engine=youtube search_query="lofi beats" --jq ".video_results[:3][].link"
   serpapi search engine=google_maps q=pizza ll="@40.7455096,-74.0083012,14z" --fields "local_results[0:5]"
   serpapi search engine=google q=coffee output=md
-  serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq ".organic_results | length"`,
+  serpapi search engine=google q=coffee --all-pages --max-pages 3 --jq ".organic_results | length"
+  serpapi search engine=google_lens --image ./photo.jpg`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runSearch,
 }
@@ -91,6 +93,7 @@ with 'serpapi archive ID'.`,
 func init() {
 	searchCmd.Flags().BoolVar(&allPagesFlag, "all-pages", false, "follow pagination and merge the arrays of every page")
 	searchCmd.Flags().IntVar(&maxPagesFlag, "max-pages", defaultMaxPages, "page limit for --all-pages; each page is one search")
+	searchCmd.Flags().StringVar(&imageFlag, "image", "", "Upload an image file (or - for stdin) and search with its image_id; needs engine=google_lens")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -104,6 +107,18 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 	warnRepeated(cmd, parsed)
 	p := params.ParamsToMap(parsed)
+	if _, exists := p["image_id"]; exists && imageFlag != "" {
+		return &clierrors.UsageError{Message: "Use either --image or image_id=<id>, not both"}
+	}
+	// Only Google Lens documents image_id; other engines would ignore it and
+	// run an unrelated search after the upload.
+	if e := p["engine"]; imageFlag != "" && e != "google_lens" {
+		if e == "" {
+			return &clierrors.UsageError{Message: "--image needs engine=google_lens"}
+		}
+		return &clierrors.UsageError{Message: "--image works only with engine=google_lens, not engine=" + e +
+			"; for another engine, upload with 'serpapi image FILE' and pass image_id=<id>"}
+	}
 
 	maxPagesSet := cmd.Flags().Changed("max-pages")
 	if maxPagesSet && maxPagesFlag < 1 {
@@ -137,6 +152,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	// Search runs without a key, as in v0.2: the API answers a few demo
 	// queries without one and returns 401 for the rest.
 	apiKey, keyErr := resolveAPIKey()
+	if imageFlag != "" {
+		// The upload requires authentication even though search tolerates a missing key.
+		if keyErr != nil {
+			return keyErr
+		}
+		imageID, err := uploadImageID(cmd, newClient(apiKey), imageFlag)
+		if err != nil {
+			return err
+		}
+		p["image_id"] = imageID
+	}
 	var cfgErr *clierrors.UsageError
 	if keyErr != config.ErrNoAPIKey && errors.As(keyErr, &cfgErr) {
 		warn(cmd, "%s; searching without a key", cfgErr.Message)
