@@ -356,8 +356,8 @@ func (c *Client) Locations(ctx context.Context, params map[string]string) (json.
 }
 
 // UploadImage uploads an image file using the Image API. The returned payload
-// contains an image_id usable with engines that accept uploaded images, such
-// as google_lens. Image IDs expire after 10 minutes.
+// contains an image_id, which only engine=google_lens takes. Image IDs expire
+// after 10 minutes.
 func (c *Client) UploadImage(ctx context.Context, path string) (json.RawMessage, error) {
 	f, err := os.Open(path)
 	if err != nil {
