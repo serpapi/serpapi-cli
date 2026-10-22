@@ -69,7 +69,7 @@ Piped, it is indented too, so head, grep and file viewers show whole lines;
 head cuts the JSON short, so take parts with --jq. A terminal gets control
 characters from results escaped, so a page cannot drive it; piped output keeps
 them. Keep results small:
-  --fields "organic_results[].{title, link}"   server-side filter (search only)
+  --fields "organic_results[].{title, link}"   server-side filter (search, extract, map, crawl)
   --jq ".organic_results[].link"                jq filter; strings print unquoted
   output=md                                     Markdown instead of JSON
 
@@ -98,10 +98,12 @@ hour old, so add it only when that is too old. zero_trace=true (Enterprise)
 stores nothing, so it skips the cache too and leaves no search for archive to
 read. account, locations and archive are free, and so is an image upload,
 though it needs searches left this month and this hour, and has its own hourly
-limit.`,
+limit. crawl counts one search per page it extracts.`,
 	Example: `  serpapi search engine=google q=coffee --fields "organic_results[0:3]"
   serpapi search engine=google coffee shops --jq ".organic_results[].link"
   serpapi search engine=google q=coffee output=md
+  serpapi extract https://example.com output=md
+  serpapi crawl https://example.com/docs/ max_pages=5 --jq ".pages[].url"
   serpapi locations q=Austin limit=3
   serpapi account --jq .total_searches_left`,
 	Version:       version.Version,
@@ -237,7 +239,7 @@ func runHelp(c *cobra.Command, args []string) error {
 func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&apiKeyFlag, "api-key", "", "SerpApi API key; prefer SERPAPI_KEY, since flags show up in ps and shell history")
-	pf.StringVar(&fieldsFlag, "fields", "", `search only: server-side json_restrictor, e.g. "organic_results[].{title, link}"`)
+	pf.StringVar(&fieldsFlag, "fields", "", `search, extract, map and crawl only: server-side json_restrictor, e.g. "organic_results[].{title, link}"`)
 	pf.StringVar(&jqFlag, "jq", "", `jq filter applied to the JSON result, e.g. ".organic_results[].link"`)
 	pf.StringVar(&timeoutFlag, "timeout", "", fmt.Sprintf(
 		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d; env SERPAPI_TIMEOUT)",
@@ -257,22 +259,35 @@ func init() {
 // starting with "-", such as -site:example.com, and an API parameter guessed
 // as a flag, such as --num 10.
 func flagErrorHint(cmd *cobra.Command, msg string) string {
-	if cmd != searchCmd && cmd != locationsCmd {
-		return msg
-	}
-	params := "API parameters are key=value pairs, e.g. engine=google q=coffee"
-	if cmd == locationsCmd {
+	var params string
+	switch cmd {
+	case searchCmd:
+		params = "API parameters are key=value pairs, e.g. engine=google q=coffee"
+	case locationsCmd:
 		params = "API parameters are key=value pairs, e.g. q=Austin limit=3"
+	case extractCmd, mapCmd, crawlCmd:
+		params = "API parameters are key=value pairs, e.g. " + extractParamExample(cmd)
+	default:
+		return msg
 	}
 	if strings.HasPrefix(msg, "unknown shorthand flag") {
 		// pflag reports "unknown shorthand flag: 'e' in -e". A one-letter flag
 		// is a guessed parameter; a longer one may be a word like -site:x.com.
-		if _, arg, _ := strings.Cut(msg, " in "); len(arg) == 2 {
+		if _, arg, _ := strings.Cut(msg, " in "); len(arg) == 2 || isExtractCommand(cmd) {
 			return msg + "; " + params
 		}
 		return msg + `; to search for a word starting with "-", put it inside q="..." or after --; ` + params
 	}
 	if name, ok := strings.CutPrefix(msg, "unknown flag: --"); ok {
+		if isExtractCommand(cmd) {
+			// search's --all-pages and --image have no Extract API parameter;
+			// its --max-pages does, as crawl's max_pages.
+			if name != "max-pages" && searchCmd.Flags().Lookup(name) != nil {
+				return msg + "; --" + name + " works only with search; " + params
+			}
+			// Extract API parameters use underscores, as in max_pages.
+			name = strings.ReplaceAll(name, "-", "_")
+		}
 		return msg + "; API parameters are key=value pairs, e.g. " + name + "=VALUE"
 	}
 	return msg
@@ -287,8 +302,8 @@ func validateGlobalFlags(cmd *cobra.Command, _ []string) error {
 	}
 	requestTimeout = timeout
 	debugRequests = resolveDebug()
-	if fieldsFlag != "" && cmd != searchCmd {
-		return &clierrors.UsageError{Message: "--fields works only with search; use --jq to filter " + cmd.Name() + " output"}
+	if fieldsFlag != "" && cmd != searchCmd && !isExtractCommand(cmd) {
+		return &clierrors.UsageError{Message: "--fields works only with search, extract, map and crawl; use --jq to filter " + cmd.Name() + " output"}
 	}
 	if jqFlag != "" {
 		if _, err := jq.Compile(jqFlag); err != nil {

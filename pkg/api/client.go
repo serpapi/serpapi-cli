@@ -172,7 +172,7 @@ func (c *Client) do(req *http.Request, endpoint string, tr *tracer) ([]byte, err
 	resp, err := c.http.Do(req)
 	if err != nil {
 		tr.logf("Request failed: %v", err)
-		return nil, c.networkError(endpoint, err)
+		return nil, c.networkError(endpoint, req.URL.Query(), err)
 	}
 	defer resp.Body.Close()
 	tr.logResponse(resp)
@@ -180,7 +180,7 @@ func (c *Client) do(req *http.Request, endpoint string, tr *tracer) ([]byte, err
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBytes)+1))
 	if err != nil {
 		tr.logf("Read body failed: %v", err)
-		return nil, c.networkError(endpoint, err)
+		return nil, c.networkError(endpoint, req.URL.Query(), err)
 	}
 	tr.logf("Body received: %d bytes", len(body))
 
@@ -197,8 +197,10 @@ func (c *Client) do(req *http.Request, endpoint string, tr *tracer) ([]byte, err
 	return body, nil
 }
 
-// networkError describes a transport failure without the request URL, which contains the API key.
-func (c *Client) networkError(endpoint string, err error) error {
+// networkError describes a transport failure without the request URL, which
+// contains the API key. query, the request's query parameters, tailors the
+// timeout advice to the engine.
+func (c *Client) networkError(endpoint string, query url.Values, err error) error {
 	cause := err
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
@@ -210,21 +212,27 @@ func (c *Client) networkError(endpoint string, err error) error {
 		if c.debug == nil {
 			debugHint = "; --debug shows which step stalled"
 		}
+		timedOut := fmt.Sprintf("Request to %s timed out after %s", endpoint, seconds(c.http.Timeout))
+		retry := func(suggested int64) string {
+			return fmt.Sprintf("retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s", suggested, debugHint)
+		}
+		const onSerpApi = " may still finish on SerpApi's side, count against your searches and be available in your search archive"
+		var message string
+		switch {
 		// An upload has no engine, search or archive entry to advise on.
-		if endpoint == "/image" {
-			return &clierrors.NetworkError{
-				Message: fmt.Sprintf("Request to %s timed out after %s: retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s",
-					endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout), debugHint),
-				Cause: cause,
-			}
+		case endpoint == "/image":
+			message = timedOut + ": " + retry(suggestedTimeout(c.http.Timeout))
+		case strings.EqualFold(query.Get("engine"), "extract") && strings.EqualFold(query.Get("mode"), "crawl"):
+			message = timedOut + ". A crawl extracts every page it visits, so it takes longer than one page: " +
+				retry(max(suggestedTimeout(c.http.Timeout), 300)) +
+				". The crawl may still finish on SerpApi's side, count one search per page and be available in your search archive"
+		case strings.EqualFold(query.Get("engine"), "extract"):
+			message = timedOut + ": " + retry(suggestedTimeout(c.http.Timeout)) + ". The extraction" + onSerpApi
+		default:
+			message = timedOut + ". Slow engines, such as google_ai_mode, and no_cache=true can take longer: " +
+				retry(suggestedTimeout(c.http.Timeout)) + ". The search" + onSerpApi
 		}
-		return &clierrors.NetworkError{
-			Message: fmt.Sprintf("Request to %s timed out after %s. Slow engines, such as google_ai_mode, and no_cache=true can take longer: "+
-				"retry with a higher --timeout, such as --timeout %d, or 0 to wait indefinitely%s. "+
-				"The search may still finish on SerpApi's side, count against your searches and be available in your search archive",
-				endpoint, seconds(c.http.Timeout), suggestedTimeout(c.http.Timeout), debugHint),
-			Cause: cause,
-		}
+		return &clierrors.NetworkError{Message: message, Cause: cause}
 	}
 	return &clierrors.NetworkError{
 		Message: fmt.Sprintf("Request to %s failed: %v", endpoint, cause),
