@@ -31,6 +31,10 @@ const (
 	// Slow engines such as google_ai_mode can take longer with no_cache=true,
 	// and SerpApi still finishes and counts a search the client gave up on.
 	DefaultTimeout = 60 * time.Second
+	// DefaultCrawlTimeout bounds an Extract API crawl, which extracts up to
+	// max_pages pages in one request. SerpApi still finishes a crawl the
+	// client gave up on and charges it one search per page.
+	DefaultCrawlTimeout = 300 * time.Second
 )
 
 // maxResponseBytes caps the response body; a variable so tests can lower it.
@@ -224,7 +228,7 @@ func (c *Client) networkError(endpoint string, query url.Values, err error) erro
 			message = timedOut + ": " + retry(suggestedTimeout(c.http.Timeout))
 		case strings.EqualFold(query.Get("engine"), "extract") && strings.EqualFold(query.Get("mode"), "crawl"):
 			message = timedOut + ". A crawl extracts every page it visits, so it takes longer than one page: " +
-				retry(max(suggestedTimeout(c.http.Timeout), 300)) +
+				retry(max(suggestedTimeout(c.http.Timeout), int64(DefaultCrawlTimeout/time.Second))) +
 				". The crawl may still finish on SerpApi's side, count one search per page and be available in your search archive"
 		case strings.EqualFold(query.Get("engine"), "extract"):
 			message = timedOut + ": " + retry(suggestedTimeout(c.http.Timeout)) + ". The extraction" + onSerpApi

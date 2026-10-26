@@ -233,14 +233,15 @@ func TestResolveTimeout(t *testing.T) {
 		flag    string
 		env     string
 		want    time.Duration
+		wantSet bool
 		wantErr bool
 	}{
 		{name: "default", want: api.DefaultTimeout},
-		{name: "flag seconds", flag: "120", want: 120 * time.Second},
-		{name: "flag fractional", flag: "1.5", want: 1500 * time.Millisecond},
-		{name: "flag zero disables", flag: "0", want: 0},
-		{name: "env fallback", env: "90", want: 90 * time.Second},
-		{name: "flag overrides env", flag: "10", env: "90", want: 10 * time.Second},
+		{name: "flag seconds", flag: "120", want: 120 * time.Second, wantSet: true},
+		{name: "flag fractional", flag: "1.5", want: 1500 * time.Millisecond, wantSet: true},
+		{name: "flag zero disables", flag: "0", want: 0, wantSet: true},
+		{name: "env fallback", env: "90", want: 90 * time.Second, wantSet: true},
+		{name: "flag overrides env", flag: "10", env: "90", want: 10 * time.Second, wantSet: true},
 		{name: "negative rejected", flag: "-5", wantErr: true},
 		{name: "garbage rejected", flag: "soon", wantErr: true},
 		{name: "env garbage rejected", env: "abc", wantErr: true},
@@ -252,7 +253,7 @@ func TestResolveTimeout(t *testing.T) {
 			t.Cleanup(func() { timeoutFlag = "" })
 			t.Setenv("SERPAPI_TIMEOUT", tt.env)
 
-			got, err := resolveTimeout()
+			got, set, err := resolveTimeout()
 			if tt.wantErr {
 				var ue *clierrors.UsageError
 				if !errors.As(err, &ue) {
@@ -263,8 +264,8 @@ func TestResolveTimeout(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tt.want {
-				t.Errorf("expected %s, got %s", tt.want, got)
+			if got != tt.want || set != tt.wantSet {
+				t.Errorf("expected %s (set %v), got %s (set %v)", tt.want, tt.wantSet, got, set)
 			}
 		})
 	}

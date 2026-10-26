@@ -103,7 +103,7 @@ serpapi extract https://example.com output=md
 serpapi extract https://example.com --jq '.inline_links[].link'
 ```
 
-It counts one search. The Extract API runs no JavaScript and follows each site's `robots.txt`. Search pages that have their own engine, such as Google or Bing, are redirected to it and return that engine's JSON. Unlike `search`, `extract`, `map` and `crawl` need an API key.
+Scraping a page and mapping a website count one search each; a crawl counts one per page it extracts. The Extract API runs no JavaScript and follows each site's `robots.txt`. Search pages that have their own engine, such as Google or Bing, are redirected to it and return that engine's JSON. Unlike `search`, `extract`, `map` and `crawl` need an API key.
 
 ### map
 
@@ -119,14 +119,14 @@ serpapi map https://books.toscrape.com --jq '.urls[].url'
 
 `serpapi crawl URL` is a shortcut for `serpapi extract URL mode=crawl`: it sends the same request and takes the same parameters and flags.
 
-Starts at the URL, follows links on the same website and extracts every page it visits, one entry each in `pages`. `max_pages` caps the pages, the first included (default 10, at most 100), and `max_depth` how many links deep it goes (default 2, at most 3; `0` is only the first page).
+Starts at the URL, follows links on the same website and extracts every page it visits, one entry each in `pages`. `max_pages` caps the pages, the first included (default 10, at most 100), and `max_depth` how many links deep it goes (default 2, at most 3; `0` is only the first page). `include_subdomains=true` also follows links to other subdomains.
 
 ```bash
 serpapi crawl https://books.toscrape.com max_pages=5 --jq '.pages[].url'
-serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1 --timeout 300
+serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1
 ```
 
-It counts one search per page it extracts, so the default `max_pages=10` can cost 10; cached and failed pages are free, and `search_metadata.credits_consumed` says what it cost. A crawl can outlast the default 60s `--timeout`, so raise it; `timeout=` is the API's own per-page fetch limit in milliseconds.
+It counts one search per page it extracts, so the default `max_pages=10` can cost 10; cached and failed pages are free, and `search_metadata.credits_consumed` says what it cost. Without `--timeout` or `SERPAPI_TIMEOUT`, a crawl waits up to 300s instead of 60s, since one that times out still runs and is charged; `timeout=` is the API's own per-page fetch limit in milliseconds.
 
 ### archive
 
@@ -188,7 +188,7 @@ Prints the CLI version, as `--version` does.
 - `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
 - `--fields <expr>`: search, extract, map and crawl only; see [search](#search).
 - `--api-key <key>`: API key. Prefer `SERPAPI_KEY`, since flags show up in `ps` and shell history.
-- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default, as can `serpapi crawl`, which extracts every page it visits; raise it when a `network_error` says the request timed out, and add `--debug` to see which step stalled. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
+- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`, `300` for a crawl; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out, and add `--debug` to see which step stalled. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
   ```bash
   # Give an AI Mode query up to two minutes
   serpapi search --timeout 120 engine=google_ai_mode q="..."

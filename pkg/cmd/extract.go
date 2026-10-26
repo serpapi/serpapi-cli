@@ -1,15 +1,15 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/serpapi/serpapi-cli/pkg/api"
 	clierrors "github.com/serpapi/serpapi-cli/pkg/errors"
-	"github.com/serpapi/serpapi-cli/pkg/output"
 	"github.com/serpapi/serpapi-cli/pkg/params"
 )
 
@@ -26,7 +26,8 @@ also be given as url=URL. Other parameters are key=value pairs sent as-is:
   mode=crawl         every page of the website it visits; same as 'serpapi crawl'
   include_tags=, exclude_tags=   CSS selectors to keep or drop
   include_markdown=true          add the main content as Markdown to JSON
-  output=md                      only the main content, as Markdown
+  output=md                      the main content as Markdown, after the
+                                 search metadata
 Search pages with their own engine, such as Google or Bing, are redirected to
 it and return that engine's JSON. The Extract API runs no JavaScript and obeys
 robots.txt, so a page that disallows it returns an error.
@@ -84,11 +85,11 @@ per page in pages.
 
 Cost: one search per page extracted, the first included, so the default
 max_pages=10 can cost 10; cached and failed pages are free.
-search_metadata.credits_consumed says what it cost. A crawl can outlast the
-60s --timeout: raise it, e.g. --timeout 300. timeout= is the Extract API's own
-per-page fetch limit in milliseconds.`,
+search_metadata.credits_consumed says what it cost. Without --timeout or
+SERPAPI_TIMEOUT, a crawl waits up to 300s, not 60s. timeout= is the Extract
+API's own per-page fetch limit in milliseconds.`,
 	Example: `  serpapi crawl https://books.toscrape.com max_pages=5 --jq ".pages[].url"
-  serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1 --timeout 300
+  serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1
   serpapi crawl https://example.com/docs/ --fields "pages[].{url, text_content}"`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runExtractMode("crawl"),
@@ -116,12 +117,9 @@ func runExtract(cmd *cobra.Command, args []string, mode string) error {
 	}
 	raw := false
 	if o, ok := p["output"]; ok {
-		if raw, err = isRawOutput(o); err != nil {
+		if raw, err = checkOutput(o); err != nil {
 			return err
 		}
-	}
-	if raw && jqFlag != "" {
-		return &clierrors.UsageError{Message: "--jq needs JSON, but output=" + p["output"] + " is not JSON"}
 	}
 	restricted := params.ApplyFields(p, fieldsFlag, "error") != ""
 
@@ -130,25 +128,12 @@ func runExtract(cmd *cobra.Command, args []string, mode string) error {
 	if err != nil {
 		return err
 	}
-	client := newClient(apiKey)
-	ctx := cmd.Context()
-	label := extractLabel(p["mode"])
-
-	if raw {
-		body, err := withSpinner(label, func() ([]byte, error) { return client.SearchRaw(ctx, p) })
-		if err != nil {
-			return err
-		}
-		return outputError(output.PrintRaw(cmd.OutOrStdout(), body))
+	// A crawl extracts up to max_pages pages in one request, and one the CLI
+	// gave up on still runs and is charged, so it gets longer by default.
+	if strings.EqualFold(p["mode"], "crawl") && !timeoutSet {
+		requestTimeout = api.DefaultCrawlTimeout
 	}
-	result, err := withSpinner(label, func() (json.RawMessage, error) { return client.Search(ctx, p) })
-	if err != nil {
-		return err
-	}
-	if restricted && isEmptyObject(result) {
-		warnNothingMatched(cmd)
-	}
-	return handleOutput(cmd, result, searchHint(p))
+	return sendSearch(cmd, newClient(apiKey), p, extractLabel(p["mode"]), raw, restricted)
 }
 
 // extractParams turns the arguments into the parameters of an Extract API
@@ -182,6 +167,10 @@ func extractParams(cmd *cobra.Command, args []string, mode string) (map[string]s
 	p := params.ParamsToMap(parsed)
 
 	name := cmd.Name()
+	// An empty URL, as from an unset "$URL", would be a blank in the list below.
+	if slices.Contains(urls, "") {
+		return nil, checkExtractURL("")
+	}
 	switch len(urls) {
 	case 0:
 		return nil, &clierrors.UsageError{Message: "No URL given, e.g. serpapi " + name + " https://example.com"}
@@ -241,7 +230,8 @@ func checkExtractURL(raw string) error {
 	}
 	msg := fmt.Sprintf("Invalid URL %q: the Extract API takes an absolute http or https URL", raw)
 	if !strings.Contains(raw, "://") {
-		if u, err := url.Parse("https://" + raw); err == nil && strings.Contains(u.Hostname(), ".") {
+		// Not mailto:me@x.com, which would parse as user "mailto:me" on x.com.
+		if u, err := url.Parse("https://" + raw); err == nil && u.User == nil && strings.Contains(u.Hostname(), ".") {
 			msg += ", e.g. https://" + raw
 		}
 	}

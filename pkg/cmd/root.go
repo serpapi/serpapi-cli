@@ -36,8 +36,10 @@ var (
 	debugFlag   bool
 
 	// requestTimeout is --timeout, else SERPAPI_TIMEOUT, as validateGlobalFlags
-	// resolved it for this run.
+	// resolved it for this run; timeoutSet says whether either was given, so
+	// a crawl can wait longer than the default.
 	requestTimeout = api.DefaultTimeout
+	timeoutSet     bool
 
 	// debugRequests is --debug, else SERPAPI_DEBUG, as validateGlobalFlags
 	// resolved it for this run.
@@ -57,8 +59,8 @@ var rootCmd = &cobra.Command{
 	Short: "Search engine results as JSON from SerpApi",
 	Long: `Search engine results as JSON from SerpApi (https://serpapi.com).
 
-Parameters are key=value pairs sent to the API as-is; words without "=" are
-joined into q. Engines and their parameters: https://serpapi.com/search-engine-apis
+Parameters are key=value pairs sent to the API as-is; search joins words
+without "=" into q. Engines and their parameters: https://serpapi.com/search-engine-apis
 
 API key, first match wins: --api-key, SERPAPI_KEY, SERPAPI_API_KEY, then the
 key saved by 'serpapi login'. Without one, search still runs, but the API
@@ -82,10 +84,10 @@ answer: 200 the search ran but reported a problem, such as no results; 400
 invalid parameters; 401 invalid API key; 403 account not allowed; 429 rate
 limited or out of searches; 5xx SerpApi failed. No status means no usable
 answer: a network_error, such as a timeout, or an unreadable response.
-Requests time out after 60s: --timeout or SERPAPI_TIMEOUT sets seconds, 0
-waits indefinitely. --debug or SERPAPI_DEBUG=1 traces each request on stderr
-(DNS, connect, TLS, first byte, headers, server timeline): plain text on a
-terminal, otherwise one {"debug":{...}} JSON object per line.
+Requests time out after 60s, a crawl after 300s: --timeout or SERPAPI_TIMEOUT
+sets seconds, 0 waits indefinitely. --debug or SERPAPI_DEBUG=1 traces each
+request on stderr (DNS, connect, TLS, first byte, headers, server timeline):
+plain text on a terminal, otherwise one {"debug":{...}} JSON object per line.
 Exit 130, code interrupted: Ctrl-C or SIGTERM stopped it before it finished,
 after printing what had arrived.
 
@@ -242,8 +244,8 @@ func init() {
 	pf.StringVar(&fieldsFlag, "fields", "", `search, extract, map and crawl only: server-side json_restrictor, e.g. "organic_results[].{title, link}"`)
 	pf.StringVar(&jqFlag, "jq", "", `jq filter applied to the JSON result, e.g. ".organic_results[].link"`)
 	pf.StringVar(&timeoutFlag, "timeout", "", fmt.Sprintf(
-		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d; env SERPAPI_TIMEOUT)",
-		int(api.DefaultTimeout/time.Second)))
+		"HTTP request timeout in seconds, such as 120, or a duration, such as 2m; 0 waits indefinitely (default %d, %d for a crawl; env SERPAPI_TIMEOUT)",
+		int(api.DefaultTimeout/time.Second), int(api.DefaultCrawlTimeout/time.Second)))
 	pf.BoolVar(&debugFlag, "debug", false,
 		"trace each request on stderr: DNS, connect, TLS, first byte, headers and the server timeline; JSON lines off a terminal (env SERPAPI_DEBUG=1)")
 
@@ -279,16 +281,13 @@ func flagErrorHint(cmd *cobra.Command, msg string) string {
 		return msg + `; to search for a word starting with "-", put it inside q="..." or after --; ` + params
 	}
 	if name, ok := strings.CutPrefix(msg, "unknown flag: --"); ok {
-		if isExtractCommand(cmd) {
-			// search's --all-pages and --image have no Extract API parameter;
-			// its --max-pages does, as crawl's max_pages.
-			if name != "max-pages" && searchCmd.Flags().Lookup(name) != nil {
-				return msg + "; --" + name + " works only with search; " + params
-			}
-			// Extract API parameters use underscores, as in max_pages.
-			name = strings.ReplaceAll(name, "-", "_")
+		// search's --all-pages and --image have no Extract API parameter, and
+		// its --max-pages has one only in crawl, max_pages.
+		if isExtractCommand(cmd) && searchCmd.Flags().Lookup(name) != nil && (name != "max-pages" || cmd != crawlCmd) {
+			return msg + "; --" + name + " works only with search; " + params
 		}
-		return msg + "; API parameters are key=value pairs, e.g. " + name + "=VALUE"
+		// API parameters use underscores, as in no_cache and max_pages.
+		return msg + "; API parameters are key=value pairs, e.g. " + strings.ReplaceAll(name, "-", "_") + "=VALUE"
 	}
 	return msg
 }
@@ -296,11 +295,11 @@ func flagErrorHint(cmd *cobra.Command, msg string) string {
 // validateGlobalFlags rejects bad flags before any request, so a typo never
 // costs a search.
 func validateGlobalFlags(cmd *cobra.Command, _ []string) error {
-	timeout, err := resolveTimeout()
+	timeout, set, err := resolveTimeout()
 	if err != nil {
 		return err
 	}
-	requestTimeout = timeout
+	requestTimeout, timeoutSet = timeout, set
 	debugRequests = resolveDebug()
 	if fieldsFlag != "" && cmd != searchCmd && !isExtractCommand(cmd) {
 		return &clierrors.UsageError{Message: "--fields works only with search, extract, map and crawl; use --jq to filter " + cmd.Name() + " output"}
@@ -314,16 +313,17 @@ func validateGlobalFlags(cmd *cobra.Command, _ []string) error {
 }
 
 // resolveTimeout returns --timeout, else SERPAPI_TIMEOUT, else
-// api.DefaultTimeout. 0 disables the limit.
-func resolveTimeout() (time.Duration, error) {
+// api.DefaultTimeout, and whether either was given. 0 disables the limit.
+func resolveTimeout() (time.Duration, bool, error) {
 	raw, source := strings.TrimSpace(timeoutFlag), "--timeout"
 	if raw == "" {
 		raw, source = strings.TrimSpace(os.Getenv("SERPAPI_TIMEOUT")), "SERPAPI_TIMEOUT"
 	}
 	if raw == "" {
-		return api.DefaultTimeout, nil
+		return api.DefaultTimeout, false, nil
 	}
-	return parseTimeout(raw, source)
+	d, err := parseTimeout(raw, source)
+	return d, true, err
 }
 
 // parseTimeout reads seconds, such as 120 or 1.5, or a duration, such as 2m.

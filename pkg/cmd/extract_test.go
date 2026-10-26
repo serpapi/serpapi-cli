@@ -89,6 +89,7 @@ func TestExtractUsageErrorsAreUnsent(t *testing.T) {
 		{"two URLs", []string{"https://a.example", "https://b.example"}, "extract takes one URL, got 2: https://a.example, https://b.example"},
 		{"URL and url=", []string{"https://a.example", "url=https://b.example"}, "extract takes one URL, got 2"},
 		{"two url=", []string{"url=https://a.example", "url=https://b.example"}, "extract takes one URL, got 2: https://a.example, https://b.example"},
+		{"empty URL with a URL", []string{"", "https://example.com"}, `Invalid URL "": the Extract API takes an absolute http or https URL`},
 		{"parameter without =", []string{"https://example.com", "main"},
 			`Unexpected argument "main": API parameters are key=value pairs, e.g. include_tags=main`},
 		{"no scheme", []string{"example.com/page"}, `Invalid URL "example.com/page": the Extract API takes an absolute http or https URL, e.g. https://example.com/page`},
@@ -101,6 +102,8 @@ func TestExtractUsageErrorsAreUnsent(t *testing.T) {
 		{"unknown output", []string{"https://example.com", "output=xml"}, "Unknown output=xml"},
 		{"parameter as a flag", []string{"https://example.com", "--mode", "map"}, "unknown flag: --mode; API parameters are key=value pairs, e.g. mode=VALUE"},
 		{"one-letter flag", []string{"https://example.com", "-m", "map"}, "API parameters are key=value pairs, e.g. include_tags=main"},
+		{"search's --max-pages", []string{"https://example.com", "--max-pages", "3"},
+			"unknown flag: --max-pages; --max-pages works only with search; API parameters are key=value pairs, e.g. include_tags=main"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeAPI(t, nil)
@@ -167,6 +170,8 @@ func TestMapAndCrawlUsageErrorsAreUnsent(t *testing.T) {
 		{"crawl without a scheme", []string{"crawl", "example.com"}, "e.g. https://example.com"},
 		{"search's --max-pages on crawl", []string{"crawl", "https://example.com", "--max-pages", "5"},
 			"unknown flag: --max-pages; API parameters are key=value pairs, e.g. max_pages=VALUE"},
+		{"search's --max-pages on map", []string{"map", "https://example.com", "--max-pages", "5"},
+			"unknown flag: --max-pages; --max-pages works only with search; API parameters are key=value pairs, e.g. include_sitemap=false"},
 		{"search's --all-pages on crawl", []string{"crawl", "https://example.com", "--all-pages"},
 			"unknown flag: --all-pages; --all-pages works only with search; API parameters are key=value pairs, e.g. max_pages=5 max_depth=1"},
 		{"search's --image on map", []string{"map", "https://example.com", "--image", "photo.png"},
@@ -194,85 +199,103 @@ func TestCrawlWithTwoURLsGetsNoCrawlAdvice(t *testing.T) {
 	}
 }
 
-func TestMapAndCrawlNeedAKeyBeforeSending(t *testing.T) {
-	for _, name := range []string{"map", "crawl"} {
-		t.Run(name, func(t *testing.T) {
-			fakeAPI(t, nil)
-			wantError(t, execute(t, "", name, "https://example.com"), 2, "usage_error", "No API key")
-		})
+// --debug is a global flag; extract must honor it as search does: a JSON
+// trace on piped stderr, without the key, and stdout untouched.
+func TestExtractTracesWithDebug(t *testing.T) {
+	fakeAPI(t, respond(debugSearchBody))
+
+	res := execute(t, "", "--api-key", extractKey, "--debug", "extract", "https://example.com/")
+
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(res.stderr), "\n") {
+		var v struct {
+			Debug *struct {
+				Event string `json:"event"`
+			} `json:"debug"`
+		}
+		if err := json.Unmarshal([]byte(line), &v); err != nil || v.Debug == nil {
+			t.Fatalf("stderr line is not a JSON debug object: %q", line)
+		}
+		events = append(events, v.Debug.Event)
+	}
+	if res.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
+	}
+	joined := strings.Join(events, "\n")
+	for _, want := range []string{"GET http", "api_key=[REDACTED]", "engine=extract", "Server search: id=abc123", "Server timeline:"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("trace missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(res.stderr, extractKey) {
+		t.Error("trace leaked the API key")
+	}
+	if !strings.Contains(res.stdout, `"abc123"`) {
+		t.Errorf("stdout = %q, want the result untouched by the trace", res.stdout)
 	}
 }
 
-// --debug and --timeout are global flags; extract, map and crawl must honor
-// them as search does: a JSON trace on piped stderr, without the key, and the
-// timeout in effect.
-func TestExtractCommandsTraceWithDebug(t *testing.T) {
-	for _, name := range []string{"extract", "map", "crawl"} {
-		t.Run(name, func(t *testing.T) {
-			fakeAPI(t, respond(debugSearchBody))
-
-			res := execute(t, "", "--api-key", extractKey, "--debug", "--timeout", "120", name, "https://example.com/")
-
-			var events []string
-			for _, line := range strings.Split(strings.TrimSpace(res.stderr), "\n") {
-				var v struct {
-					Debug *struct {
-						Event string `json:"event"`
-					} `json:"debug"`
-				}
-				if err := json.Unmarshal([]byte(line), &v); err != nil || v.Debug == nil {
-					t.Fatalf("stderr line is not a JSON debug object: %q", line)
-				}
-				events = append(events, v.Debug.Event)
-			}
-			if res.code != 0 {
-				t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
-			}
-			joined := strings.Join(events, "\n")
-			for _, want := range []string{"GET http", "api_key=[REDACTED]", "engine=extract", "Timeout: 120s", "Server search: id=abc123", "Server timeline:"} {
-				if !strings.Contains(joined, want) {
-					t.Errorf("trace missing %q:\n%s", want, joined)
-				}
-			}
-			if strings.Contains(res.stderr, extractKey) {
-				t.Error("trace leaked the API key")
-			}
-			if !strings.Contains(res.stdout, `"abc123"`) {
-				t.Errorf("stdout = %q, want the result untouched by the trace", res.stdout)
-			}
-		})
-	}
-}
-
-func TestExtractCommandsTimeOut(t *testing.T) {
-	const extraction = "Request to /search.json timed out after 50ms: retry with a higher --timeout, such as --timeout 120"
-	const crawl = "Request to /search.json timed out after 50ms. A crawl extracts every page it visits, so it takes longer than one page: " +
-		"retry with a higher --timeout, such as --timeout 300"
+// A crawl waits up to 300s unless --timeout or SERPAPI_TIMEOUT says
+// otherwise; the trace shows the limit each request ran with.
+func TestExtractTimeouts(t *testing.T) {
 	for _, tc := range []struct {
 		name, env, want string
 		args            []string
 	}{
-		{"extract --timeout", "", extraction, []string{"--timeout", "0.05", "extract"}},
-		{"map --timeout", "", extraction, []string{"--timeout", "50ms", "map"}},
-		{"extract mode=crawl", "", crawl, []string{"--timeout", "50ms", "extract", "mode=crawl"}},
-		{"crawl --timeout", "", crawl, []string{"--timeout", "0.05", "crawl"}},
-		{"crawl SERPAPI_TIMEOUT", "0.05", crawl, []string{"crawl"}},
+		{"extract", "", "Timeout: 60s", []string{"extract"}},
+		{"map", "", "Timeout: 60s", []string{"map"}},
+		{"crawl", "", "Timeout: 300s", []string{"crawl"}},
+		{"extract mode=crawl", "", "Timeout: 300s", []string{"extract", "mode=Crawl"}},
+		{"crawl --timeout", "", "Timeout: 30s", []string{"--timeout", "30", "crawl"}},
+		{"crawl --timeout 0", "", "Timeout: disabled", []string{"--timeout", "0", "crawl"}},
+		{"crawl SERPAPI_TIMEOUT", "45", "Timeout: 45s", []string{"crawl"}},
+		{"map --timeout", "", "Timeout: 120s", []string{"--timeout", "2m", "map"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeAPI(t, hang)
+			fakeAPI(t, respond(`{"search_metadata":{"id":"e1"}}`))
 			t.Setenv("SERPAPI_TIMEOUT", tc.env)
 
-			start := time.Now()
-			res := execute(t, "", append(append([]string{"--api-key", extractKey}, tc.args...), "https://example.com/")...)
+			res := execute(t, "", append(append([]string{"--api-key", extractKey, "--debug"}, tc.args...), "https://example.com/")...)
 
-			wantError(t, res, 1, "network_error", tc.want)
-			if strings.Contains(res.stdout+res.stderr, "Slow engines") {
-				t.Errorf("advice blames slow engines:\n%s%s", res.stdout, res.stderr)
+			if res.code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr: %s", res.code, res.stderr)
 			}
-			if elapsed := time.Since(start); elapsed > 2*time.Second {
-				t.Errorf("took %v, want the 50ms timeout to stop it", elapsed)
+			if !strings.Contains(res.stderr, `"event":"`+tc.want+`"`) {
+				t.Errorf("trace has no %q:\n%s", tc.want, res.stderr)
 			}
 		})
+	}
+}
+
+// The timeout stops the request; its advice is the Extract API's, worded in
+// pkg/api, not search's slow engines.
+func TestCrawlTimesOut(t *testing.T) {
+	fakeAPI(t, hang)
+
+	start := time.Now()
+	res := execute(t, "", "--api-key", extractKey, "--timeout", "50ms", "crawl", "https://example.com/")
+
+	wantError(t, res, 1, "network_error", "Request to /search.json timed out after 50ms. A crawl extracts every page it visits")
+	if strings.Contains(res.stderr, "Slow engines") {
+		t.Errorf("advice blames slow engines: %s", res.stderr)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %v, want the 50ms timeout to stop it", elapsed)
+	}
+}
+
+func TestCheckExtractURLSuggestsHTTPS(t *testing.T) {
+	const takes = ": the Extract API takes an absolute http or https URL"
+	for raw, want := range map[string]string{
+		"example.com/page":      `Invalid URL "example.com/page"` + takes + ", e.g. https://example.com/page",
+		"example.com:8080/page": `Invalid URL "example.com:8080/page"` + takes + ", e.g. https://example.com:8080/page",
+		"mailto:me@x.com":       `Invalid URL "mailto:me@x.com"` + takes,
+		"ftp://example.com":     `Invalid URL "ftp://example.com"` + takes,
+		"":                      `Invalid URL ""` + takes,
+	} {
+		if err := checkExtractURL(raw); err == nil || err.Error() != "Usage error: "+want {
+			t.Errorf("checkExtractURL(%q) = %v, want %s", raw, err, want)
+		}
 	}
 }
 

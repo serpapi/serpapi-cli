@@ -44,12 +44,9 @@ func runArchive(cmd *cobra.Command, args []string) error {
 		}
 		format = v
 	}
-	raw, err := isRawOutput(format)
+	raw, err := checkOutput(format)
 	if err != nil {
 		return err
-	}
-	if raw && jqFlag != "" {
-		return &clierrors.UsageError{Message: "--jq needs JSON, but output=" + format + " is not JSON"}
 	}
 
 	apiKey, err := resolveAPIKey()

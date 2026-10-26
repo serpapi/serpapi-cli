@@ -128,7 +128,6 @@ func TestUsageErrorsWithoutNetwork(t *testing.T) {
 		{[]string{"extract", "https://example.com"}, "No API key found"},
 		{[]string{"--api-key", "x", "extract", "example.com"}, "e.g. https://example.com"},
 		{[]string{"crawl", "https://example.com", "mode=map"}, "crawl always uses mode=crawl"},
-		{[]string{"map", "https://example.com"}, "No API key found"},
 	}
 	for _, tt := range tests {
 		res := serpapi(t, "", tt.args...)

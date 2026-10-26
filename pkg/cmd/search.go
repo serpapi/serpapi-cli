@@ -129,12 +129,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 	raw := false
 	if o, ok := p["output"]; ok {
-		if raw, err = isRawOutput(o); err != nil {
+		if raw, err = checkOutput(o); err != nil {
 			return err
 		}
-	}
-	if raw && jqFlag != "" {
-		return &clierrors.UsageError{Message: "--jq needs JSON, but output=" + p["output"] + " is not JSON"}
 	}
 	if raw && allPagesFlag {
 		return &clierrors.UsageError{Message: "--all-pages needs JSON, but output=" + p["output"] + " is not JSON"}
@@ -170,17 +167,19 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if keyErr != config.ErrNoAPIKey && errors.As(keyErr, &cfgErr) {
 		warn(cmd, "%s; searching without a key", cfgErr.Message)
 	}
-	err = sendSearch(cmd, newClient(apiKey), p, raw, restrictor != "")
+	err = sendSearch(cmd, newClient(apiKey), p, "Searching...", raw, restrictor != "")
 	if apiKey == "" {
 		err = explainMissingKey(err)
 	}
 	return err
 }
 
-func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, raw, restricted bool) error {
+// sendSearch sends p to /search.json and prints the answer, with label on the
+// spinner.
+func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, label string, raw, restricted bool) error {
 	ctx := cmd.Context()
 	if raw {
-		body, err := withSpinner("Searching...", func() ([]byte, error) { return client.SearchRaw(ctx, p) })
+		body, err := withSpinner(label, func() ([]byte, error) { return client.SearchRaw(ctx, p) })
 		if err != nil {
 			return err
 		}
@@ -190,7 +189,7 @@ func sendSearch(cmd *cobra.Command, client *api.Client, p map[string]string, raw
 		return searchAllPages(cmd, client, p, restricted)
 	}
 
-	result, err := withSpinner("Searching...", func() (json.RawMessage, error) { return client.Search(ctx, p) })
+	result, err := withSpinner(label, func() (json.RawMessage, error) { return client.Search(ctx, p) })
 	if err != nil {
 		return err
 	}
@@ -212,6 +211,15 @@ func explainMissingKey(err error) error {
 		Status:  apiErr.Status,
 		Cause:   apiErr.Cause,
 	}
+}
+
+// checkOutput refuses an unknown output=format, or one that isn't JSON
+// together with --jq, before any request, and reports whether it isn't JSON.
+func checkOutput(format string) (raw bool, err error) {
+	if raw, err = isRawOutput(format); err == nil && raw && jqFlag != "" {
+		err = &clierrors.UsageError{Message: "--jq needs JSON, but output=" + format + " is not JSON"}
+	}
+	return raw, err
 }
 
 func isRawOutput(o string) (bool, error) {
