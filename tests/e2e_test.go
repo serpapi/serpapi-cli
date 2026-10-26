@@ -125,6 +125,9 @@ func TestUsageErrorsWithoutNetwork(t *testing.T) {
 		{[]string{"--api-key", "x", "archive", "../bad"}, "Invalid archive ID"},
 		{[]string{"--api-key", "x", "search", "engine=google", "q=coffee", "output=xml"}, "Unknown output=xml"},
 		{[]string{"locations"}, "Pass a location query"},
+		{[]string{"extract", "https://example.com"}, "No API key found"},
+		{[]string{"--api-key", "x", "extract", "example.com"}, "e.g. https://example.com"},
+		{[]string{"crawl", "https://example.com", "mode=map"}, "crawl always uses mode=crawl"},
 	}
 	for _, tt := range tests {
 		res := serpapi(t, "", tt.args...)
@@ -276,6 +279,38 @@ func TestArchive(t *testing.T) {
 	wantSuccess(t, res)
 	if strings.TrimSpace(res.stdout) == "" {
 		t.Error("expected Markdown output for the archived search")
+	}
+}
+
+func TestExtract(t *testing.T) {
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "--jq", ".page_information.title", "extract", "https://example.com/")
+	wantSuccess(t, res)
+	if got := strings.TrimSpace(res.stdout); got != "Example Domain" {
+		t.Errorf("page title = %q, want Example Domain", got)
+	}
+
+	res = serpapi(t, "", "--api-key", key, "extract", "https://example.com/", "output=md")
+	wantSuccess(t, res)
+	// Markdown opens with the search's metadata as YAML front matter.
+	if !strings.HasPrefix(res.stdout, "---\n") || !strings.Contains(res.stdout, "engine: extract") || !strings.Contains(res.stdout, "documentation examples") {
+		t.Errorf("want the page as Markdown, got %q", res.stdout)
+	}
+}
+
+// TestMapAndCrawl costs two searches: a map, and a crawl of one page.
+func TestMapAndCrawl(t *testing.T) {
+	key := requireLive(t)
+	res := serpapi(t, "", "--api-key", key, "--jq", ".search_parameters.mode", "map", "https://example.com/")
+	wantSuccess(t, res)
+	if got := strings.TrimSpace(res.stdout); got != "map" {
+		t.Errorf("map ran mode %q, want map", got)
+	}
+
+	res = serpapi(t, "", "--api-key", key, "--jq", ".pages | map(.url) | join(\" \")", "crawl", "https://example.com/", "max_pages=1")
+	wantSuccess(t, res)
+	if got := strings.TrimSpace(res.stdout); got != "https://example.com/" {
+		t.Errorf("crawl pages = %q, want only https://example.com/", got)
 	}
 }
 

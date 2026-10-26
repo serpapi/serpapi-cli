@@ -85,6 +85,49 @@ serpapi search engine=google_lens --image ./photo.jpg --jq ".visual_matches[:5]"
 
 Supported formats are JPG/JPEG, PNG and WebP up to 500 KB. See the [Google Lens image upload docs](https://serpapi.com/google-lens-upload-an-image).
 
+### extract
+
+Fetches a public web page with the [Extract API](https://serpapi.com/extract-api) and returns its content as structured JSON, or as Markdown with `output=md`. It is a search with `engine=extract`, so `--fields`, `--jq`, `output=`, `async=true` and `archive` work as they do for `search`. The URL must be absolute `http` or `https`; quote it when it has `?` or `&`. It can also be given as `url=URL`. Other parameters are `key=value` pairs sent as-is:
+
+| Parameter | Does |
+|---|---|
+| `mode=scrape` | extracts the page itself (default) |
+| `mode=map` | lists the website's URLs; shortcut: [`serpapi map`](#map) |
+| `mode=crawl` | extracts every page of the website it visits; shortcut: [`serpapi crawl`](#crawl) |
+| `include_tags=`, `exclude_tags=` | CSS selectors to keep or drop before parsing |
+| `include_markdown=true` | adds the main content as Markdown in `text_content.markdown` |
+
+```bash
+serpapi extract https://example.com
+serpapi extract https://example.com output=md
+serpapi extract https://example.com --jq '.inline_links[].link'
+```
+
+Scraping a page and mapping a website count one search each; a crawl counts one per page it extracts. The Extract API runs no JavaScript and follows each site's `robots.txt`. Search pages that have their own engine, such as Google or Bing, are redirected to it and return that engine's JSON. Unlike `search`, `extract`, `map` and `crawl` need an API key.
+
+### map
+
+`serpapi map URL` is a shortcut for `serpapi extract URL mode=map`: it sends the same request and takes the same parameters and flags.
+
+Lists a website's URLs, from the links on the page and the website's sitemaps. `include_sitemap=false` keeps to the page's links; `include_subdomains=true` adds other subdomains, such as `blog.example.com` from `www.example.com`. It counts one search.
+
+```bash
+serpapi map https://books.toscrape.com --jq '.urls[].url'
+```
+
+### crawl
+
+`serpapi crawl URL` is a shortcut for `serpapi extract URL mode=crawl`: it sends the same request and takes the same parameters and flags.
+
+Starts at the URL, follows links on the same website and extracts every page it visits, one entry each in `pages`. `max_pages` caps the pages, the first included (default 10, at most 100), and `max_depth` how many links deep it goes (default 2, at most 3; `0` is only the first page). `include_subdomains=true` also follows links to other subdomains.
+
+```bash
+serpapi crawl https://books.toscrape.com max_pages=5 --jq '.pages[].url'
+serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1
+```
+
+It counts one search per page it extracts, so the default `max_pages=10` can cost 10; cached and failed pages are free, and `search_metadata.credits_consumed` says what it cost. Without `--timeout` or `SERPAPI_TIMEOUT`, a crawl waits up to 300s instead of 60s, since one that times out still runs and is charged; `timeout=` is the API's own per-page fetch limit in milliseconds.
+
 ### archive
 
 Fetches an earlier search by its `search_metadata.id`, for free. A search made with `async=true` has `search_metadata.status` `Queued` or `Processing` until it is `Success`, so poll. `output=` takes the same values as in search.
@@ -143,9 +186,9 @@ Prints the CLI version, as `--version` does.
 ## Global flags
 
 - `--jq <expr>`: [jq](https://jqlang.github.io/jq/manual/) filter applied to the JSON result, like `gh --jq`; strings print unquoted and `null` as an empty line, and results stream as they are produced. A filter that prints only `null` gets a warning listing the response's top-level keys. jq is built in, so nothing else needs installing. In bash and zsh, quote the expression with single quotes.
-- `--fields <expr>`: search only; see [search](#search).
+- `--fields <expr>`: search, extract, map and crawl only; see [search](#search).
 - `--api-key <key>`: API key. Prefer `SERPAPI_KEY`, since flags show up in `ps` and shell history.
-- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out, and add `--debug` to see which step stalled. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
+- `--timeout <seconds>`: HTTP request timeout in seconds, such as `120`, or a duration, such as `2m` (default `60`, `300` for a crawl; env `SERPAPI_TIMEOUT`). `0` waits indefinitely. Slow engines such as `google_ai_mode`, and searches with `no_cache=true`, can take longer than the default; raise it when a `network_error` says the request timed out, and add `--debug` to see which step stalled. A timed-out search may still finish on SerpApi's side, count against your searches and be available in your search archive.
   ```bash
   # Give an AI Mode query up to two minutes
   serpapi search --timeout 120 engine=google_ai_mode q="..."
@@ -185,7 +228,7 @@ The API key comes from the first of:
 3. `SERPAPI_API_KEY`
 4. the key saved by `serpapi login`
 
-Without a key, `search` still runs, but the API answers only a few demo queries such as `q=coffee` and returns 401 for the rest. `account` and `archive` need a key.
+Without a key, `search` still runs, but the API answers only a few demo queries such as `q=coffee` and returns 401 for the rest. `account`, `archive`, `extract`, `map` and `crawl` need a key.
 
 `serpapi login` saves the key, readable only by you, to `serpapi/config.toml` in the OS config directory: `$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows. Without an absolute `HOME` (`%AppData%` on Windows) there is no config file: `login` exits 2, and other commands need `--api-key` or `SERPAPI_KEY`.
 
@@ -193,7 +236,7 @@ Without a key, `search` still runs, but the API answers only a few demo queries 
 api_key = "your_serpapi_key_here"
 ```
 
-A config file that can't be read or isn't valid TOML is reported by path and line, never by content: `search` warns and runs without a key, while `account` and `archive` stop. `serpapi login` rewrites it.
+A config file that can't be read or isn't valid TOML is reported by path and line, never by content: `search` warns and runs without a key, while `account`, `archive`, `extract`, `map` and `crawl` stop. `serpapi login` rewrites it.
 
 ## For AI agents
 
@@ -217,7 +260,7 @@ A config file that can't be read or isn't valid TOML is reported by path and lin
   | 1 | `network_error` | No answer, such as a timeout. |
   | 130 | `interrupted` | Ctrl-C or SIGTERM stopped it before it finished, after printing what had arrived, such as the `--all-pages` pages fetched so far. |
 
-- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free, and so is an `image` upload, though it needs searches left this month and this hour, and has its own hourly limit, `account_rate_limit_per_hour` in `serpapi account`.
+- **Cost**: each successful search counts against your monthly searches, including each `--all-pages` page; cached, errored and failed ones don't, though errored ones count toward the hourly limit ([pricing FAQ](https://serpapi.com/pricing)). An identical search, `--fields` included, repeated within an hour comes from the cache. `no_cache=true` forces a new, counted search; cached results are at most an hour old, so add it only when that is too old. `zero_trace=true` (Enterprise) stores nothing, so it skips the cache too and leaves no search for `archive` to read. `account`, `locations` and `archive` are free, and so is an `image` upload, though it needs searches left this month and this hour, and has its own hourly limit, `account_rate_limit_per_hour` in `serpapi account`. `crawl` counts one search per page it extracts.
 - **No prompts without a terminal.** Only `serpapi login` and an image given as `-` (`serpapi image -`, `search --image -`) read stdin. `login` waits for the first line, so pipe the key in (`printf %s "$KEY" | serpapi login`) or, simpler, set `SERPAPI_KEY`; an image is read until stdin closes.
 
 ## Links

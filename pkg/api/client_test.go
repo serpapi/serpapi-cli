@@ -406,7 +406,7 @@ func (osTimeout) Temporary() bool { return true }
 // system timeout, such as a TCP connect timeout, is reported as is.
 func TestOSTimeoutWithoutAClientLimit(t *testing.T) {
 	c := New("secret", WithTimeout(0))
-	err := c.networkError("/search.json", &url.Error{Op: "Get", URL: "https://serpapi.com/search.json?api_key=secret", Err: osTimeout{}})
+	err := c.networkError("/search.json", nil, &url.Error{Op: "Get", URL: "https://serpapi.com/search.json?api_key=secret", Err: osTimeout{}})
 	var netErr *clierrors.NetworkError
 	if !errors.As(err, &netErr) || netErr.Message != "Request to /search.json failed: i/o timeout" {
 		t.Errorf("got %v, want the OS timeout without --timeout advice", err)
@@ -421,7 +421,7 @@ func TestTimeoutAdviceRaisesTheLimit(t *testing.T) {
 		120 * time.Second:     "--timeout 240,",
 		301 * time.Second:     "--timeout 602,",
 	} {
-		err := New("secret", WithTimeout(limit)).networkError("/search.json", osTimeout{})
+		err := New("secret", WithTimeout(limit)).networkError("/search.json", nil, osTimeout{})
 		var netErr *clierrors.NetworkError
 		if !errors.As(err, &netErr) || !strings.Contains(netErr.Message, want) {
 			t.Errorf("limit %s: got %v, want it to contain %q", limit, err, want)
@@ -437,7 +437,7 @@ func TestTimeoutAdvicePointsToDebugWhenItIsOff(t *testing.T) {
 			WithDebug(io.Discard, false)(c)
 		}
 		var netErr *clierrors.NetworkError
-		if err := c.networkError("/search.json", osTimeout{}); !errors.As(err, &netErr) {
+		if err := c.networkError("/search.json", nil, osTimeout{}); !errors.As(err, &netErr) {
 			t.Fatalf("debug %v: got %v, want a NetworkError", debug, err)
 		}
 		if suggests := strings.Contains(netErr.Message, "--debug shows which step stalled"); suggests == debug {
@@ -631,8 +631,42 @@ func TestUploadTimeoutAdviceLeavesOutTheSearch(t *testing.T) {
 		archivePath("abc"): search(archivePath("abc")),
 	} {
 		var netErr *clierrors.NetworkError
-		if err := New("secret", WithTimeout(50*time.Millisecond)).networkError(endpoint, osTimeout{}); !errors.As(err, &netErr) || netErr.Message != want {
+		if err := New("secret", WithTimeout(50*time.Millisecond)).networkError(endpoint, nil, osTimeout{}); !errors.As(err, &netErr) || netErr.Message != want {
 			t.Errorf("%s: got %v\nwant %s", endpoint, err, want)
 		}
+	}
+}
+
+// The Extract API has no slow engines to blame: its advice is about the
+// extraction, and a crawl's about the pages it extracts.
+func TestExtractTimeoutAdvice(t *testing.T) {
+	retry := func(suggested string) string {
+		return "retry with a higher --timeout, such as --timeout " + suggested + ", or 0 to wait indefinitely; --debug shows which step stalled"
+	}
+	extraction := "Request to /search.json timed out after 50ms: " + retry("120") +
+		". The extraction may still finish on SerpApi's side, count against your searches and be available in your search archive"
+	crawl := "Request to /search.json timed out after 50ms. A crawl extracts every page it visits, so it takes longer than one page: " + retry("300") +
+		". The crawl may still finish on SerpApi's side, count one search per page and be available in your search archive"
+	for _, tc := range []struct {
+		query url.Values
+		want  string
+	}{
+		{url.Values{"engine": {"extract"}}, extraction},
+		{url.Values{"engine": {"extract"}, "mode": {"map"}}, extraction},
+		{url.Values{"engine": {"Extract"}, "mode": {"scrape"}}, extraction},
+		{url.Values{"engine": {"extract"}, "mode": {"crawl"}}, crawl},
+		{url.Values{"engine": {"EXTRACT"}, "mode": {"Crawl"}}, crawl},
+	} {
+		var netErr *clierrors.NetworkError
+		if err := New("secret", WithTimeout(50*time.Millisecond)).networkError("/search.json", tc.query, osTimeout{}); !errors.As(err, &netErr) || netErr.Message != tc.want {
+			t.Errorf("%v: got %v\nwant %s", tc.query, err, tc.want)
+		}
+	}
+
+	// A crawl that outlasted a long limit is told to double it.
+	query := url.Values{"engine": {"extract"}, "mode": {"crawl"}}
+	var netErr *clierrors.NetworkError
+	if err := New("secret", WithTimeout(400*time.Second)).networkError("/search.json", query, osTimeout{}); !errors.As(err, &netErr) || !strings.Contains(netErr.Message, "--timeout 800,") {
+		t.Errorf("got %v, want --timeout 800", err)
 	}
 }

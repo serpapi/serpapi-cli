@@ -104,6 +104,8 @@ func edgeCases() []edgeCase {
 		{name: "flags/unknown flag", args: searchWith("--bogus"), exit: 2, code: "usage_error",
 			msg: "unknown flag: --bogus; API parameters are key=value pairs, e.g. bogus=VALUE"},
 		{name: "flags/API parameter as a flag", args: searchWith("--num", "10"), exit: 2, code: "usage_error", msg: "e.g. num=VALUE"},
+		{name: "flags/dashed API parameter as a flag", args: searchWith("--no-cache"), exit: 2, code: "usage_error",
+			msg: "unknown flag: --no-cache; API parameters are key=value pairs, e.g. no_cache=VALUE", exact: true},
 		{name: "flags/one-letter flag guess", args: []string{"search", "-e", "youtube", "--search_query", "Rick"}, exit: 2, code: "usage_error",
 			msg: "unknown shorthand flag: 'e' in -e; API parameters are key=value pairs, e.g. engine=google q=coffee", exact: true},
 		{name: "flags/unknown flag outside search", args: []string{"account", "--bogus"}, exit: 2, code: "usage_error", msg: "unknown flag: --bogus", exact: true},
