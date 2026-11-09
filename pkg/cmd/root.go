@@ -105,7 +105,7 @@ limit. crawl counts one search per page it extracts.`,
   serpapi search engine=google coffee shops --jq ".organic_results[].link"
   serpapi search engine=google q=coffee output=md
   serpapi extract https://example.com output=md
-  serpapi crawl https://example.com/docs/ max_pages=5 --jq ".pages[].url"
+  serpapi crawl https://books.toscrape.com max_pages=5 --jq ".pages[].url"
   serpapi locations q=Austin limit=3
   serpapi account --jq .total_searches_left`,
 	Version:       version.Version,

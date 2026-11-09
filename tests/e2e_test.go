@@ -284,17 +284,45 @@ func TestArchive(t *testing.T) {
 
 func TestExtract(t *testing.T) {
 	key := requireLive(t)
-	res := serpapi(t, "", "--api-key", key, "--jq", ".page_information.title", "extract", "https://example.com/")
+	res := serpapi(t, "", "--api-key", key, "extract", "https://example.com/")
 	wantSuccess(t, res)
-	if got := strings.TrimSpace(res.stdout); got != "Example Domain" {
-		t.Errorf("page title = %q, want Example Domain", got)
+	var page struct {
+		PageInformation struct{ Title string } `json:"page_information"`
+		Markdown        string
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &page); err != nil {
+		t.Fatalf("invalid extract JSON: %v", err)
+	}
+	if page.PageInformation.Title != "Example Domain" {
+		t.Errorf("page title = %q, want Example Domain", page.PageInformation.Title)
+	}
+	if !strings.Contains(page.Markdown, "documentation examples") {
+		t.Fatalf("want top-level markdown by default, got %q", page.Markdown)
 	}
 
 	res = serpapi(t, "", "--api-key", key, "extract", "https://example.com/", "output=md")
 	wantSuccess(t, res)
-	// Markdown opens with the search's metadata as YAML front matter.
-	if !strings.HasPrefix(res.stdout, "---\n") || !strings.Contains(res.stdout, "engine: extract") || !strings.Contains(res.stdout, "documentation examples") {
-		t.Errorf("want the page as Markdown, got %q", res.stdout)
+	if strings.TrimSpace(res.stdout) != strings.TrimSpace(page.Markdown) {
+		t.Errorf("want the page's Markdown without search metadata, got %q", res.stdout)
+	}
+
+	res = serpapi(t, "", "--api-key", key, "extract", "https://example.com/", "include_markdown=false")
+	wantSuccess(t, res)
+	var withoutMarkdown map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(res.stdout), &withoutMarkdown); err != nil {
+		t.Fatalf("invalid extract JSON: %v", err)
+	}
+	if _, ok := withoutMarkdown["markdown"]; ok {
+		t.Error("include_markdown=false must omit markdown")
+	}
+	if _, ok := withoutMarkdown["page_information"]; !ok {
+		t.Error("include_markdown=false must preserve page information")
+	}
+
+	res = serpapi(t, "", "--api-key", key, "extract", "https://example.com/", "include_tags=p", "--fields", "markdown", "--jq", ".markdown")
+	wantSuccess(t, res)
+	if !strings.Contains(res.stdout, "documentation examples") {
+		t.Errorf("want Markdown through selectors, --fields and --jq, got %q", res.stdout)
 	}
 }
 
@@ -307,10 +335,19 @@ func TestMapAndCrawl(t *testing.T) {
 		t.Errorf("map ran mode %q, want map", got)
 	}
 
-	res = serpapi(t, "", "--api-key", key, "--jq", ".pages | map(.url) | join(\" \")", "crawl", "https://example.com/", "max_pages=1")
+	res = serpapi(t, "", "--api-key", key, "crawl", "https://example.com/", "max_pages=1", "--fields", "pages[].{url,markdown}")
 	wantSuccess(t, res)
-	if got := strings.TrimSpace(res.stdout); got != "https://example.com/" {
-		t.Errorf("crawl pages = %q, want only https://example.com/", got)
+	var crawl struct {
+		Pages []struct{ URL, Markdown string }
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &crawl); err != nil {
+		t.Fatalf("invalid crawl JSON: %v", err)
+	}
+	if len(crawl.Pages) != 1 || crawl.Pages[0].URL != "https://example.com/" {
+		t.Fatalf("crawl pages = %+v, want only https://example.com/", crawl.Pages)
+	}
+	if !strings.Contains(crawl.Pages[0].Markdown, "documentation examples") {
+		t.Errorf("want each page's Markdown by default, got %q", crawl.Pages[0].Markdown)
 	}
 }
 

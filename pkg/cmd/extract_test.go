@@ -41,27 +41,28 @@ func TestExtractSendsTheURLAsAnExtractSearch(t *testing.T) {
 }
 
 func TestExtractSendsParamsAndFields(t *testing.T) {
-	reqs := fakeAPI(t, respond(`{"pages":[{"url":"https://example.com/"}]}`))
+	reqs := fakeAPI(t, respond(`{"pages":[{"url":"https://example.com/","markdown":"Example content"}]}`))
 
 	res := execute(t, "", "--api-key", extractKey, "extract", "https://example.com/", "mode=crawl", "max_pages=5",
-		"--fields", "pages[].url", "--jq", ".pages[0].url")
+		"--fields", "pages[].{url,markdown}", "--jq", ".pages[0].markdown")
 
 	wantOK(t, res)
-	if got := strings.TrimSpace(res.stdout); got != "https://example.com/" {
+	if got := strings.TrimSpace(res.stdout); got != "Example content" {
 		t.Errorf("stdout = %q, want the --jq result", got)
 	}
 	wantQuery(t, reqs.only(t), "/search.json", map[string]string{
-		"engine": "extract", "mode": "crawl", "max_pages": "5", "json_restrictor": "pages[].url,error",
+		"engine": "extract", "mode": "crawl", "max_pages": "5", "json_restrictor": "pages[].{url,markdown},error",
 	})
 }
 
 func TestExtractPrintsMarkdownVerbatim(t *testing.T) {
-	reqs := fakeAPI(t, respond("---\nsearch_parameters:\n  engine: extract\n---\n\nThis domain is for use in documentation examples.\n"))
+	const markdown = "# Example Domain\n\nThis domain is for use in documentation examples.\n"
+	reqs := fakeAPI(t, respond(markdown))
 
 	res := execute(t, "", "--api-key", extractKey, "extract", "https://example.com/", "output=md")
 
 	wantOK(t, res)
-	if res.stdout != "---\nsearch_parameters:\n  engine: extract\n---\n\nThis domain is for use in documentation examples.\n" {
+	if res.stdout != markdown {
 		t.Errorf("stdout = %q, want the Markdown as sent", res.stdout)
 	}
 	wantQuery(t, reqs.only(t), "/search.json", map[string]string{"engine": "extract", "output": "md"})
@@ -91,7 +92,7 @@ func TestExtractUsageErrorsAreUnsent(t *testing.T) {
 		{"two url=", []string{"url=https://a.example", "url=https://b.example"}, "extract takes one URL, got 2: https://a.example, https://b.example"},
 		{"empty URL with a URL", []string{"", "https://example.com"}, `Invalid URL "": the Extract API takes an absolute http or https URL`},
 		{"parameter without =", []string{"https://example.com", "main"},
-			`Unexpected argument "main": API parameters are key=value pairs, e.g. include_tags=main`},
+			`Unexpected argument "main": API parameters are key=value pairs, e.g. include_tags=p`},
 		{"no scheme", []string{"example.com/page"}, `Invalid URL "example.com/page": the Extract API takes an absolute http or https URL, e.g. https://example.com/page`},
 		{"other scheme", []string{"ftp://example.com/file"}, "takes an absolute http or https URL"},
 		{"relative path", []string{"/about"}, `Invalid URL "/about"`},
@@ -101,9 +102,9 @@ func TestExtractUsageErrorsAreUnsent(t *testing.T) {
 		{"jq with Markdown", []string{"https://example.com", "output=md", "--jq", ".x"}, "--jq needs JSON, but output=md is not JSON"},
 		{"unknown output", []string{"https://example.com", "output=xml"}, "Unknown output=xml"},
 		{"parameter as a flag", []string{"https://example.com", "--mode", "map"}, "unknown flag: --mode; API parameters are key=value pairs, e.g. mode=VALUE"},
-		{"one-letter flag", []string{"https://example.com", "-m", "map"}, "API parameters are key=value pairs, e.g. include_tags=main"},
+		{"one-letter flag", []string{"https://example.com", "-m", "map"}, "API parameters are key=value pairs, e.g. include_tags=p"},
 		{"search's --max-pages", []string{"https://example.com", "--max-pages", "3"},
-			"unknown flag: --max-pages; --max-pages works only with search; API parameters are key=value pairs, e.g. include_tags=main"},
+			"unknown flag: --max-pages; --max-pages works only with search; API parameters are key=value pairs, e.g. include_tags=p"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeAPI(t, nil)

@@ -19,28 +19,37 @@ var extractCmd = &cobra.Command{
 	Long: `Extract a public web page with the SerpApi Extract API (engine=extract):
 https://serpapi.com/extract-api
 
+JSON includes the main content in markdown by default, alongside metadata
+and extracted links, images and other structured data. Empty sections are omitted.
+
 The URL must be absolute http or https; quote it when it has ? or &. It may
 also be given as url=URL. Other parameters are key=value pairs sent as-is:
   mode=scrape        the page itself (default)
   mode=map           the website's URLs; same as 'serpapi map'
   mode=crawl         every page of the website it visits; same as 'serpapi crawl'
-  include_tags=, exclude_tags=   CSS selectors to keep or drop
-  include_markdown=true          add the main content as Markdown to JSON
-  output=md                      the main content as Markdown, after the
-                                 search metadata
+  include_tags=, exclude_tags=   comma-separated CSS selectors to keep or drop
+  include_markdown=false         omit markdown from JSON (default true)
+  output=md                     the page's Markdown without search metadata
+  output=html                   the fetched HTML
+  timeout=30000                 per-page fetch timeout in milliseconds
+                                (default 30000, range 1000-120000)
+  prefetch_delay=0               delay before the first fetch in milliseconds
+                                (default 0, range 0-10000; runs no JavaScript)
+timeout= is separate from the CLI's --timeout, which is in seconds.
 Search pages with their own engine, such as Google or Bing, are redirected to
-it and return that engine's JSON. The Extract API runs no JavaScript and obeys
+it and return that engine's results. The Extract API runs no JavaScript and obeys
 robots.txt, so a page that disallows it returns an error.
 
---fields and --jq work as in search, e.g. --jq .text_content.full. Entries
+--fields and --jq work on JSON as in search, e.g. --jq .markdown. Entries
 with a URL carry a serpapi_extract_link for extracting that URL next.
 
 Cost: scrape and map count one search each; crawl counts one per page it
 extracts. Cached and failed ones are free, as in search.`,
 	Example: `  serpapi extract https://example.com
   serpapi extract https://example.com output=md
-  serpapi extract https://example.com --jq ".inline_links[].link"
-  serpapi extract https://example.com include_tags=main --jq .text_content.full`,
+  serpapi extract https://example.com --jq .markdown
+  serpapi extract https://example.com include_tags=p --fields markdown --jq .markdown
+  serpapi extract https://quotes.toscrape.com --jq ".inline_links[].link"`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runExtractMode(""),
 }
@@ -53,16 +62,17 @@ sitemaps. Same as 'serpapi extract URL mode=map'; see 'serpapi extract --help'.
 
 Parameters are key=value pairs sent as-is:
   include_sitemap=false      only the page's links, not /sitemap.xml and the
-                             sitemaps robots.txt lists
+                             sitemaps robots.txt lists (default true)
   include_subdomains=true    also other subdomains, such as blog.example.com
-                             from www.example.com
+                             from www.example.com (default false)
 URLs that robots.txt disallows are left out. Each entry in urls has a
-serpapi_extract_link for extracting it next.
+serpapi_extract_link for extracting it next. output=md returns the URL list
+as Markdown.
 
-Cost: one search.`,
+Cost: one search; cached and failed requests are free.`,
 	Example: `  serpapi map https://books.toscrape.com
   serpapi map https://books.toscrape.com --jq ".urls[].url"
-  serpapi map https://example.com include_sitemap=false include_subdomains=true`,
+  serpapi map https://www.python.org include_sitemap=false include_subdomains=true`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runExtractMode("map"),
 }
@@ -79,18 +89,22 @@ Parameters are key=value pairs sent as-is:
                              at most 100)
   max_depth=N                links deep to follow; 0 is only the first page
                              (default 2, at most 3)
-  include_subdomains=true    also follow links to other subdomains
+  include_subdomains=true    also follow links to other subdomains (default false)
 Links that robots.txt disallows are not followed. The result has one entry
-per page in pages.
+per page in pages, with url, depth and the same content fields as a scrape,
+including markdown by default. Failed pages have an error field.
+include_markdown=false omits Markdown from every page; content selectors apply
+to every page, and empty sections are omitted. output=md returns each page's
+Markdown under its URL.
 
-Cost: one search per page extracted, the first included, so the default
+Cost: one search per successfully extracted page, the first included, so the default
 max_pages=10 can cost 10; cached and failed pages are free.
 search_metadata.credits_consumed says what it cost. Without --timeout or
 SERPAPI_TIMEOUT, a crawl waits up to 300s, not 60s. timeout= is the Extract
 API's own per-page fetch limit in milliseconds.`,
 	Example: `  serpapi crawl https://books.toscrape.com max_pages=5 --jq ".pages[].url"
-  serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1
-  serpapi crawl https://example.com/docs/ --fields "pages[].{url, text_content}"`,
+  serpapi crawl https://books.toscrape.com max_pages=3 max_depth=1
+  serpapi crawl https://books.toscrape.com max_pages=2 --fields "pages[].{url,markdown}"`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runExtractMode("crawl"),
 }
@@ -128,8 +142,8 @@ func runExtract(cmd *cobra.Command, args []string, mode string) error {
 	if err != nil {
 		return err
 	}
-	// A crawl extracts up to max_pages pages in one request, and one the CLI
-	// gave up on still runs and is charged, so it gets longer by default.
+	// A crawl extracts up to max_pages pages in one request and can keep
+	// running and charging after the CLI gives up, so it gets longer by default.
 	if strings.EqualFold(p["mode"], "crawl") && !timeoutSet {
 		requestTimeout = api.DefaultCrawlTimeout
 	}
@@ -218,7 +232,7 @@ func extractParamExample(cmd *cobra.Command) string {
 	case "crawl":
 		return "max_pages=5 max_depth=1"
 	}
-	return "include_tags=main"
+	return "include_tags=p"
 }
 
 // checkExtractURL refuses, before any request, a URL the Extract API would:
