@@ -87,46 +87,56 @@ Supported formats are JPG/JPEG, PNG and WebP up to 500 KB. See the [Google Lens 
 
 ### extract
 
-Fetches a public web page with the [Extract API](https://serpapi.com/extract-api) and returns its content as structured JSON, or as Markdown with `output=md`. It is a search with `engine=extract`, so `--fields`, `--jq`, `output=`, `async=true` and `archive` work as they do for `search`. The URL must be absolute `http` or `https`; quote it when it has `?` or `&`. It can also be given as `url=URL`. Other parameters are `key=value` pairs sent as-is:
+Fetches a public web page with the [Extract API](https://serpapi.com/extract-api). JSON includes the page's main content in the top-level `markdown` field by default, alongside metadata and extracted links, images and other structured data. Empty sections are omitted. `output=md` returns the page's Markdown directly, without search metadata; `output=html` returns the fetched HTML. It is a search with `engine=extract`, so `--fields`, `--jq`, `async=true` and `archive` work as they do for `search`. `--jq` needs JSON output.
+
+The URL must be absolute `http` or `https`; quote it when it has `?` or `&`. It can also be given as `url=URL`. Other parameters are `key=value` pairs sent as-is:
 
 | Parameter | Does |
 |---|---|
 | `mode=scrape` | extracts the page itself (default) |
 | `mode=map` | lists the website's URLs; shortcut: [`serpapi map`](#map) |
 | `mode=crawl` | extracts every page of the website it visits; shortcut: [`serpapi crawl`](#crawl) |
-| `include_tags=`, `exclude_tags=` | CSS selectors to keep or drop before parsing |
-| `include_markdown=true` | adds the main content as Markdown in `text_content.markdown` |
+| `include_tags=`, `exclude_tags=` | comma-separated CSS selectors to keep or drop before parsing |
+| `include_markdown=false` | omits `markdown` from JSON; defaults to `true` |
+| `timeout=30000` | per-page fetch timeout in milliseconds (default 30,000; range 1,000–120,000), separate from the CLI's `--timeout` |
+| `prefetch_delay=0` | delay before the first fetch in milliseconds (default 0; range 0–10,000); does not run JavaScript |
 
 ```bash
 serpapi extract https://example.com
 serpapi extract https://example.com output=md
-serpapi extract https://example.com --jq '.inline_links[].link'
+serpapi extract https://example.com --jq .markdown
+serpapi extract https://example.com include_tags=p --fields markdown --jq .markdown
+serpapi extract https://quotes.toscrape.com --jq '.inline_links[].link'
 ```
 
-Scraping a page and mapping a website count one search each; a crawl counts one per page it extracts. The Extract API runs no JavaScript and follows each site's `robots.txt`. Search pages that have their own engine, such as Google or Bing, are redirected to it and return that engine's JSON. Unlike `search`, `extract`, `map` and `crawl` need an API key.
+Scraping a page and mapping a website count one search each; a crawl counts one per page it extracts. The Extract API runs no JavaScript and follows each site's `robots.txt`. Search pages that have their own engine, such as Google or Bing, are redirected to it and return that engine's results. Unlike `search`, `extract`, `map` and `crawl` need an API key.
 
 ### map
 
 `serpapi map URL` is a shortcut for `serpapi extract URL mode=map`: it sends the same request and takes the same parameters and flags.
 
-Lists a website's URLs, from the links on the page and the website's sitemaps. `include_sitemap=false` keeps to the page's links; `include_subdomains=true` adds other subdomains, such as `blog.example.com` from `www.example.com`. It counts one search.
+Lists a website's URLs in `urls`, from the links on the page and the website's sitemaps. `include_sitemap` defaults to `true`; setting it to `false` keeps to the page's links. `include_subdomains` defaults to `false`; setting it to `true` adds other subdomains, such as `blog.example.com` from `www.example.com`. URLs disallowed by `robots.txt` are omitted. `output=md` returns the URL list as Markdown. It counts one search; cached and failed requests are free.
 
 ```bash
 serpapi map https://books.toscrape.com --jq '.urls[].url'
+serpapi map https://www.python.org include_sitemap=false include_subdomains=true
 ```
 
 ### crawl
 
 `serpapi crawl URL` is a shortcut for `serpapi extract URL mode=crawl`: it sends the same request and takes the same parameters and flags.
 
-Starts at the URL, follows links on the same website and extracts every page it visits, one entry each in `pages`. `max_pages` caps the pages, the first included (default 10, at most 100), and `max_depth` how many links deep it goes (default 2, at most 3; `0` is only the first page). `include_subdomains=true` also follows links to other subdomains.
+Starts at the URL, follows links on the same website and extracts every page it visits, one entry each in `pages`. Each entry has `url`, `depth` and the same content fields as a single-page extraction, including `markdown` by default. Failed pages have an `error` field. `output=md` returns each page's Markdown under its URL.
+
+`max_pages` caps the pages, the first included (default 10, at most 100), and `max_depth` how many links deep it goes (default 2, at most 3; `0` is only the first page). `include_subdomains` defaults to `false`; setting it to `true` also follows links to other subdomains. Links disallowed by `robots.txt` are not followed. Content selectors apply to every page, so a page with no matching content can have no `markdown` field. `include_markdown=false` omits Markdown from all pages.
 
 ```bash
 serpapi crawl https://books.toscrape.com max_pages=5 --jq '.pages[].url'
-serpapi crawl https://books.toscrape.com max_pages=20 max_depth=1
+serpapi crawl https://books.toscrape.com max_pages=3 max_depth=1
+serpapi crawl https://books.toscrape.com max_pages=2 --fields 'pages[].{url,markdown}'
 ```
 
-It counts one search per page it extracts, so the default `max_pages=10` can cost 10; cached and failed pages are free, and `search_metadata.credits_consumed` says what it cost. Without `--timeout` or `SERPAPI_TIMEOUT`, a crawl waits up to 300s instead of 60s, since one that times out still runs and is charged; `timeout=` is the API's own per-page fetch limit in milliseconds.
+It counts one search per successfully extracted page, so the default `max_pages=10` can cost 10; cached and failed pages are free, and `search_metadata.credits_consumed` says what it cost. Without `--timeout` or `SERPAPI_TIMEOUT`, a crawl waits up to 300s instead of 60s, since one that times out can still finish and be charged; `timeout=` is the API's own per-page fetch limit in milliseconds.
 
 ### archive
 
